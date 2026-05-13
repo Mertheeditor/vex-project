@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
 type Message = {
@@ -50,11 +50,15 @@ type ProjectData = {
 };
 
 type ActiveView = "chat" | "memory" | "projects";
+type BackendStatus = "checking" | "online" | "offline";
 
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
+  const [backendMessage, setBackendMessage] = useState("Backend kontrol ediliyor...");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -79,9 +83,48 @@ function App() {
     {
       id: 1,
       sender: "Vex",
-      text: "Hazırım Mert. Artık mikrofonu başlatıp durdurarak konuşmanı dinleyebiliyorum.",
+      text: "Hazırım Mert. Artık mikrofonu başlatıp durdurarak konuşmanı dinleyebiliyorum. Backend durumunu da takip ediyorum.",
     },
   ]);
+
+  useEffect(() => {
+    checkBackendHealth();
+
+    const intervalId = window.setInterval(() => {
+      checkBackendHealth();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  async function checkBackendHealth() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/", {
+        method: "GET",
+      });
+
+      if (!response.ok) {
+        throw new Error("Backend cevap verdi ama sağlıklı değil.");
+      }
+
+      const data = await response.json();
+
+      setBackendStatus("online");
+      setBackendMessage(data?.message ?? "Vex backend bağlı.");
+    } catch (error) {
+      console.error(error);
+      setBackendStatus("offline");
+      setBackendMessage("Backend kapalı veya ulaşılamıyor.");
+    }
+  }
+
+  function getBackendLabel() {
+    if (backendStatus === "online") return "Backend: Bağlı";
+    if (backendStatus === "offline") return "Backend: Kapalı";
+    return "Backend: Kontrol ediliyor";
+  }
 
   function slugify(text: string) {
     return text
@@ -277,6 +320,7 @@ function App() {
       setShowProjectForm(false);
 
       await loadProjects();
+      await checkBackendHealth();
     } catch (error) {
       console.error(error);
       alert("Proje oluşturulamadı. Backend çalışıyor mu kontrol edelim.");
@@ -285,7 +329,7 @@ function App() {
     }
   }
 
-  async function deleteProject(projectId: string, projectName: string) {
+  async function deleteProject(projectId: string) {
     try {
       const response = await fetch(`http://127.0.0.1:8000/projects/${projectId}`, {
         method: "DELETE",
@@ -296,6 +340,7 @@ function App() {
       }
 
       await loadProjects();
+      await checkBackendHealth();
     } catch (error) {
       console.error(error);
       alert("Proje silinemedi. Backend çalışıyor mu kontrol edelim.");
@@ -304,6 +349,11 @@ function App() {
 
   async function startVoiceRecording() {
     if (isRecording || isSending || isTranscribing) {
+      return;
+    }
+
+    if (backendStatus === "offline") {
+      alert("Backend kapalı görünüyor. Önce backend’i başlatalım.");
       return;
     }
 
@@ -330,6 +380,8 @@ function App() {
     } catch (error) {
       console.error(error);
       setIsRecording(false);
+      setBackendStatus("offline");
+      setBackendMessage("Backend kapalı veya ses endpoint’i ulaşılamıyor.");
       setVoiceStatus("Kayıt başlatılamadı.");
       alert("Kayıt başlatılamadı. Backend açık mı kontrol edelim.");
     }
@@ -371,8 +423,12 @@ function App() {
         setVoiceStatus(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
         alert(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
       }
+
+      await checkBackendHealth();
     } catch (error) {
       console.error(error);
+      setBackendStatus("offline");
+      setBackendMessage("Backend kapalı veya ses endpoint’i ulaşılamıyor.");
       setVoiceStatus("Ses yazıya çevrilemedi.");
       alert("Ses yazıya çevrilemedi. Backend açık mı kontrol edelim.");
     } finally {
@@ -402,6 +458,11 @@ function App() {
     const cleanInput = (messageOverride ?? input).trim();
 
     if (!cleanInput || isSending || (isRecording && !messageOverride)) {
+      return;
+    }
+
+    if (backendStatus === "offline") {
+      alert("Backend kapalı görünüyor. Mesaj göndermek için backend’i başlatmamız gerekiyor.");
       return;
     }
 
@@ -479,6 +540,7 @@ function App() {
       });
 
       speakText(vexReply.text);
+      await checkBackendHealth();
     } catch (error) {
       const errorReply: Message = {
         id: Date.now() + 3,
@@ -487,6 +549,8 @@ function App() {
       };
 
       setMessages((currentMessages) => [...currentMessages, errorReply]);
+      setBackendStatus("offline");
+      setBackendMessage("Backend kapalı veya ulaşılamıyor.");
       console.error(error);
     } finally {
       setIsSending(false);
@@ -568,6 +632,10 @@ function App() {
                   Sesi Durdur
                 </button>
 
+                <span className={`status-pill backend-${backendStatus}`}>
+                  {getBackendLabel()}
+                </span>
+
                 <span className="status-pill">
                   {isRecording
                     ? "Kayıt alınıyor..."
@@ -595,7 +663,7 @@ function App() {
                 className={`mic-button ${isRecording ? "recording" : ""}`}
                 type="button"
                 onClick={toggleVoiceRecording}
-                disabled={isSending || isTranscribing}
+                disabled={isSending || isTranscribing || backendStatus === "offline"}
                 title={isRecording ? "Kaydı durdur ve yazıya çevir" : "Kaydı başlat"}
               >
                 {isRecording ? "Durdur" : isTranscribing ? "Çevriliyor..." : "Mikrofon"}
@@ -615,7 +683,12 @@ function App() {
 
               <button
                 onClick={() => sendMessage()}
-                disabled={isSending || isRecording || isTranscribing}
+                disabled={
+                  isSending ||
+                  isRecording ||
+                  isTranscribing ||
+                  backendStatus === "offline"
+                }
               >
                 {isSending ? "Düşünüyor..." : "Gönder"}
               </button>
@@ -804,7 +877,7 @@ function App() {
                           <button
                             className="danger-button"
                             type="button"
-                            onClick={() => deleteProject(project.id, project.name)}
+                            onClick={() => deleteProject(project.id)}
                           >
                             Sil
                           </button>
@@ -848,6 +921,12 @@ function App() {
 
       <aside className="work-panel">
         <h3>İş Paneli</h3>
+
+        <div className="panel-card">
+          <p className="panel-label">Backend durumu</p>
+          <strong>{getBackendLabel()}</strong>
+          <p className="panel-label">{backendMessage}</p>
+        </div>
 
         <div className="panel-card">
           <p className="panel-label">Aktif bölüm</p>

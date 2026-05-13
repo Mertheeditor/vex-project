@@ -524,3 +524,20 @@ input {
   opacity: 0.6;
   cursor: not-allowed;
 }
+.backend-online {
+  border-color: rgba(22, 199, 102, 0.42);
+  color: #c8f8d7;
+  background: rgba(16, 151, 65, 0.14);
+}
+
+.backend-offline {
+  border-color: rgba(255, 92, 92, 0.42);
+  color: #ffd2d2;
+  background: rgba(255, 92, 92, 0.14);
+}
+
+.backend-checking {
+  border-color: rgba(255, 204, 102, 0.42);
+  color: #ffe6a6;
+  background: rgba(255, 204, 102, 0.14);
+}
