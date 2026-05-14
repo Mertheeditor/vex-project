@@ -95,16 +95,34 @@ type ApprovalFromChatResult = {
   source_message?: string;
 };
 
-type ActiveView = "chat" | "memory" | "projects" | "tasks" | "approvals";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals";
 type BackendStatus = "checking" | "online" | "offline";
 
+type WorkspaceSummary = {
+  success: boolean;
+  counts: {
+    active_projects: number;
+    open_tasks: number;
+    high_priority_tasks: number;
+    pending_approvals: number;
+  };
+  active_projects: ProjectData[];
+  open_tasks: TaskData[];
+  high_priority_tasks: TaskData[];
+  pending_approvals: ApprovalData[];
+  suggested_next_step: string;
+};
+
 function App() {
-  const [activeView, setActiveView] = useState<ActiveView>("chat");
+  const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
 
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
   const [backendMessage, setBackendMessage] = useState("Backend kontrol ediliyor...");
+
+  const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -146,6 +164,7 @@ function App() {
 
   useEffect(() => {
     checkBackendHealth({ force: true });
+    loadWorkspaceSummary();
 
     const intervalId = window.setInterval(() => {
       checkBackendHealth();
@@ -234,6 +253,7 @@ function App() {
   }
 
   function getActiveViewLabel() {
+    if (activeView === "dashboard") return "Dashboard";
     if (activeView === "chat") return "Genel sohbet";
     if (activeView === "memory") return "Hafıza merkezi";
     if (activeView === "projects") return "Proje merkezi";
@@ -551,6 +571,26 @@ Açıklama:
 ${approval.description || "Açıklama yok."}
 
 Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
+  }
+
+  async function loadWorkspaceSummary() {
+    setIsWorkspaceLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/summary");
+
+      if (!response.ok) {
+        throw new Error("Workspace özeti yüklenemedi.");
+      }
+
+      const data = await response.json();
+      setWorkspaceSummary(data);
+    } catch (error) {
+      console.error(error);
+      setWorkspaceSummary(null);
+    } finally {
+      setIsWorkspaceLoading(false);
+    }
   }
 
   async function loadMemory() {
@@ -952,6 +992,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
+  function openDashboardView() {
+    setActiveView("dashboard");
+    loadWorkspaceSummary();
+  }
+
   function openMemoryView() {
     setActiveView("memory");
     loadMemory();
@@ -1139,6 +1184,13 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
         <nav className="nav-list">
           <button
+            className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
+            onClick={openDashboardView}
+          >
+            Dashboard
+          </button>
+
+          <button
             className={`nav-item ${activeView === "chat" ? "active" : ""}`}
             onClick={() => setActiveView("chat")}
           >
@@ -1180,6 +1232,127 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       </aside>
 
       <section className="chat-area">
+
+        {activeView === "dashboard" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Vex çalışma alanı</p>
+                <h2>Dashboard</h2>
+              </div>
+              <div className="topbar-actions">
+                <button className="small-action-button" onClick={loadWorkspaceSummary}>
+                  Yenile
+                </button>
+
+                <span className={`status-pill backend-${backendStatus}`}>
+                  {getBackendLabel()}
+                </span>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {isWorkspaceLoading ? (
+                <div className="panel-card">
+                  <strong>Dashboard yükleniyor...</strong>
+                </div>
+              ) : workspaceSummary ? (
+                <>
+                  <div className="memory-grid">
+                    <div className="memory-card">
+                      <p className="panel-label">Aktif projeler</p>
+                      <h3>{workspaceSummary.counts.active_projects}</h3>
+                    </div>
+
+                    <div className="memory-card">
+                      <p className="panel-label">Açık görevler</p>
+                      <h3>{workspaceSummary.counts.open_tasks}</h3>
+                    </div>
+
+                    <div className="memory-card">
+                      <p className="panel-label">Yüksek öncelik</p>
+                      <h3>{workspaceSummary.counts.high_priority_tasks}</h3>
+                    </div>
+
+                    <div className="memory-card">
+                      <p className="panel-label">Bekleyen onay</p>
+                      <h3>{workspaceSummary.counts.pending_approvals}</h3>
+                    </div>
+                  </div>
+
+                  <div className="memory-section">
+                    <div className="memory-section-header">
+                      <div>
+                        <p className="eyebrow">Önerilen sonraki adım</p>
+                        <h3>{workspaceSummary.suggested_next_step}</h3>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="project-grid">
+                    <div className="project-card">
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">Öncelikli görevler</p>
+                          <h3>Bugün bakılacak işler</h3>
+                        </div>
+                        <button className="small-action-button" onClick={openTasksView}>
+                          Görevlere Git
+                        </button>
+                      </div>
+
+                      <div className="project-section">
+                        {workspaceSummary.high_priority_tasks.length > 0 ? (
+                          <ul>
+                            {workspaceSummary.high_priority_tasks.slice(0, 5).map((task) => (
+                              <li key={task.id}>
+                                {task.title} — {task.project_id || "Genel"} / {task.priority}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="panel-label">Yüksek öncelikli açık görev yok.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="project-card">
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">Bekleyen onaylar</p>
+                          <h3>Riskli işlemler</h3>
+                        </div>
+                        <button className="small-action-button" onClick={openApprovalsView}>
+                          Onaylara Git
+                        </button>
+                      </div>
+
+                      <div className="project-section">
+                        {workspaceSummary.pending_approvals.length > 0 ? (
+                          <ul>
+                            {workspaceSummary.pending_approvals.slice(0, 5).map((approval) => (
+                              <li key={approval.id}>
+                                {approval.title} — {approval.risk_level}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="panel-label">Bekleyen onay yok.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="panel-card">
+                  <strong>Dashboard yüklenemedi.</strong>
+                  <p className="panel-label">Backend çalışıyor mu kontrol edelim.</p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+
         {activeView === "chat" ? (
           <>
             <header className="topbar">

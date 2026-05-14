@@ -799,6 +799,58 @@ Mert'in mesajı:
     return normalize_project_data(parsed)
 
 
+
+@app.get("/workspace/summary")
+def workspace_summary():
+    projects_data = load_projects()
+    tasks_data = load_tasks()
+    approvals_data = load_approvals()
+
+    active_projects = [
+        project for project in projects_data
+        if project.get("status", "").lower() == "aktif"
+    ]
+
+    open_tasks = [
+        task for task in tasks_data
+        if task.get("status", "").lower() != "tamamlandı"
+    ]
+
+    high_priority_tasks = [
+        task for task in open_tasks
+        if task.get("priority", "").lower() in ["yüksek", "kritik"]
+    ]
+
+    pending_approvals = [
+        approval for approval in approvals_data
+        if approval.get("status", "").lower() == "bekliyor"
+    ]
+
+    suggested_next_step = "Bugün önce açık görevleri ve bekleyen onayları kontrol edelim."
+
+    if pending_approvals:
+        suggested_next_step = "Bekleyen onaylar var; önce Onay Merkezi’ni kontrol etmek iyi olur."
+    elif high_priority_tasks:
+        suggested_next_step = "Yüksek öncelikli görevler var; önce onlardan biriyle başlamak iyi olur."
+    elif active_projects:
+        suggested_next_step = f"Aktif proje olarak {active_projects[0].get('name', 'ilk proje')} üzerinden devam edebiliriz."
+
+    return {
+        "success": True,
+        "counts": {
+            "active_projects": len(active_projects),
+            "open_tasks": len(open_tasks),
+            "high_priority_tasks": len(high_priority_tasks),
+            "pending_approvals": len(pending_approvals),
+        },
+        "active_projects": active_projects,
+        "open_tasks": open_tasks,
+        "high_priority_tasks": high_priority_tasks,
+        "pending_approvals": pending_approvals,
+        "suggested_next_step": suggested_next_step,
+    }
+
+
 @app.get("/")
 def root():
     return {
