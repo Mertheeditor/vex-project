@@ -100,6 +100,8 @@ type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
   success: boolean;
+  active_project?: ProjectData | null;
+  active_project_id?: string;
   counts: {
     active_projects: number;
     open_tasks: number;
@@ -113,6 +115,13 @@ type WorkspaceSummary = {
   suggested_next_step: string;
 };
 
+type ActiveProjectResponse = {
+  success: boolean;
+  message?: string;
+  project_id: string;
+  project: ProjectData | null;
+};
+
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [input, setInput] = useState("");
@@ -123,6 +132,9 @@ function App() {
 
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false);
+
+  const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState("");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -164,6 +176,7 @@ function App() {
 
   useEffect(() => {
     checkBackendHealth({ force: true });
+    loadActiveProject();
     loadWorkspaceSummary();
 
     const intervalId = window.setInterval(() => {
@@ -585,11 +598,70 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
       const data = await response.json();
       setWorkspaceSummary(data);
+
+      if (data?.active_project) {
+        setActiveProject(data.active_project);
+        setActiveProjectId(data.active_project_id ?? data.active_project.id ?? "");
+      }
     } catch (error) {
       console.error(error);
       setWorkspaceSummary(null);
     } finally {
       setIsWorkspaceLoading(false);
+    }
+  }
+
+  async function loadActiveProject() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/active-project");
+
+      if (!response.ok) {
+        throw new Error("Aktif proje yüklenemedi.");
+      }
+
+      const data: ActiveProjectResponse = await response.json();
+
+      setActiveProject(data.project);
+      setActiveProjectId(data.project_id || "");
+    } catch (error) {
+      console.error(error);
+      setActiveProject(null);
+      setActiveProjectId("");
+    }
+  }
+
+  async function setProjectAsActive(projectId: string) {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/active-project", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Aktif proje güncellenemedi.");
+      }
+
+      const data: ActiveProjectResponse = await response.json();
+
+      if (!data.success) {
+        alert(data.message ?? "Aktif proje güncellenemedi.");
+        return;
+      }
+
+      setActiveProject(data.project);
+      setActiveProjectId(data.project_id || "");
+
+      await loadWorkspaceSummary();
+      await loadProjects();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Aktif proje güncellenemedi. Backend çalışıyor mu kontrol edelim.");
     }
   }
 
@@ -994,6 +1066,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
   function openDashboardView() {
     setActiveView("dashboard");
+    loadActiveProject();
     loadWorkspaceSummary();
   }
 
@@ -1004,6 +1077,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
   function openProjectsView() {
     setActiveView("projects");
+    loadActiveProject();
     loadProjects();
   }
 
@@ -1259,6 +1333,12 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
               ) : workspaceSummary ? (
                 <>
                   <div className="memory-grid">
+                    <div className="memory-card">
+                      <p className="panel-label">Şu an üzerinde çalışılan proje</p>
+                      <h3>{activeProject?.name ?? "Seçilmedi"}</h3>
+                      <p>{activeProject?.type ?? "Projeler panelinden aktif proje seçebilirsin."}</p>
+                    </div>
+
                     <div className="memory-card">
                       <p className="panel-label">Aktif projeler</p>
                       <h3>{workspaceSummary.counts.active_projects}</h3>
@@ -1627,7 +1707,20 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                         </div>
 
                         <div className="project-card-actions">
+                          {activeProjectId === project.id ? (
+                            <span className="status-pill">Aktif Proje</span>
+                          ) : (
+                            <button
+                              className="small-action-button"
+                              type="button"
+                              onClick={() => setProjectAsActive(project.id)}
+                            >
+                              Aktif Yap
+                            </button>
+                          )}
+
                           <span className="status-pill">{project.status}</span>
+
                           <button
                             className="danger-button"
                             type="button"
@@ -1876,6 +1969,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
           <p className="panel-label">Backend durumu</p>
           <strong>{getBackendLabel()}</strong>
           <p className="panel-label">{backendMessage}</p>
+        </div>
+
+        <div className="panel-card">
+          <p className="panel-label">Aktif proje</p>
+          <strong>{activeProject?.name ?? "Seçilmedi"}</strong>
         </div>
 
         <div className="panel-card">
