@@ -480,6 +480,7 @@ function App() {
       },
       body: JSON.stringify({
         message: text,
+        project_id: activeProjectId,
       }),
     });
 
@@ -498,6 +499,7 @@ function App() {
       },
       body: JSON.stringify({
         message: text,
+        project_id: activeProjectId,
       }),
     });
 

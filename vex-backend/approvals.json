@@ -52,5 +52,23 @@
       "Canlıya alma işlemi yüksek riskli olarak sınıflandırılmıştır.",
       "Bilsanpack proje ayarları doğrultusunda işlem yapılacaktır."
     ]
+  },
+  {
+    "id": "urun-yayinlama-onayi",
+    "title": "Ürün Yayınlama Onayı",
+    "project_id": "airpack-europe",
+    "action_type": "shopify_publish",
+    "risk_level": "yüksek",
+    "status": "bekliyor",
+    "description": "Belirtilen ürünün Shopify mağazasında canlıya alınması için onay gerekiyor.",
+    "payload": {
+      "source_message": "Vex, bu ürünü canlıya al.",
+      "detected_action": "shopify_publish",
+      "target": "Shopify Ürün Kataloğu"
+    },
+    "notes": [
+      "Canlıya alma işlemi ürünün müşteriler tarafından görünür olmasını sağlar.",
+      "İşlem sonrası ürün detayları global pazarda yayına girecektir."
+    ]
   }
 ]

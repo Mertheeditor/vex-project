@@ -10,5 +10,16 @@
       "Öncelikli görev olarak işaretlendi.",
       "Global pazara uygun profesyonel ambalaj sitesi konseptine sadık kalınmalı."
     ]
+  },
+  {
+    "id": "ana-sayfa-hero-metni-olusturma",
+    "title": "Ana sayfa hero metnini hazırla",
+    "project_id": "airpack-europe",
+    "status": "açık",
+    "priority": "yüksek",
+    "description": "Web sitesinin ana sayfa giriş (hero) bölümünde kullanılacak olan etkileyici metinlerin oluşturulması.",
+    "notes": [
+      "Öncelik kullanıcı tarafından yüksek olarak belirtildi."
+    ]
   }
 ]
