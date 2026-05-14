@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 type Message = {
@@ -49,6 +49,14 @@ type ProjectData = {
   notes: string[];
 };
 
+type ProjectFromChatResult = {
+  success: boolean;
+  message: string;
+  project?: ProjectData;
+  projects?: ProjectData[];
+  source_message?: string;
+};
+
 type ActiveView = "chat" | "memory" | "projects";
 type BackendStatus = "checking" | "online" | "offline";
 
@@ -79,31 +87,74 @@ function App() {
   const [projectGoals, setProjectGoals] = useState("");
   const [projectNotes, setProjectNotes] = useState("");
 
+  const isBusyRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const isTranscribingRef = useRef(false);
+  const isSendingRef = useRef(false);
+
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
       sender: "Vex",
-      text: "Hazırım Mert. Artık mikrofonu başlatıp durdurarak konuşmanı dinleyebiliyorum. Backend durumunu da takip ediyorum.",
+      text: "Hazırım Mert. Artık mikrofonu başlatıp durdurarak konuşmanı dinleyebiliyorum, backend durumunu takip ediyorum ve sohbetten proje oluşturabiliyorum.",
     },
   ]);
 
   useEffect(() => {
-    checkBackendHealth();
+    checkBackendHealth({ force: true });
 
     const intervalId = window.setInterval(() => {
       checkBackendHealth();
-    }, 5000);
+    }, 7000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, []);
 
-  async function checkBackendHealth() {
+  function setBusyState(value: boolean) {
+    isBusyRef.current = value;
+  }
+
+  function updateRecording(value: boolean) {
+    isRecordingRef.current = value;
+    setIsRecording(value);
+  }
+
+  function updateTranscribing(value: boolean) {
+    isTranscribingRef.current = value;
+    setIsTranscribing(value);
+  }
+
+  function updateSending(value: boolean) {
+    isSendingRef.current = value;
+    setIsSending(value);
+  }
+
+  async function checkBackendHealth(options?: { force?: boolean }) {
+    const shouldSkip =
+      !options?.force &&
+      (isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current);
+
+    if (shouldSkip) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 2500);
+
     try {
       const response = await fetch("http://127.0.0.1:8000/", {
         method: "GET",
+        signal: controller.signal,
       });
+
+      window.clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error("Backend cevap verdi ama sağlıklı değil.");
@@ -114,6 +165,18 @@ function App() {
       setBackendStatus("online");
       setBackendMessage(data?.message ?? "Vex backend bağlı.");
     } catch (error) {
+      window.clearTimeout(timeoutId);
+
+      const stillBusy =
+        isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current;
+
+      if (stillBusy) {
+        return;
+      }
+
       console.error(error);
       setBackendStatus("offline");
       setBackendMessage("Backend kapalı veya ulaşılamıyor.");
@@ -224,6 +287,21 @@ function App() {
     );
   }
 
+  function shouldCreateProjectFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    const hasProjectWord = lowerText.includes("proje");
+    const hasCreateIntent =
+      lowerText.includes("oluştur") ||
+      lowerText.includes("olustur") ||
+      lowerText.includes("aç") ||
+      lowerText.includes("ac") ||
+      lowerText.includes("ekle") ||
+      lowerText.includes("kaydet");
+
+    return hasProjectWord && hasCreateIntent;
+  }
+
   async function saveMessageToMemory(text: string): Promise<MemorySaveResult | null> {
     const response = await fetch("http://127.0.0.1:8000/memory/rules/from-chat", {
       method: "POST",
@@ -242,7 +320,56 @@ function App() {
     return response.json();
   }
 
+  async function createProjectFromChat(text: string): Promise<ProjectFromChatResult> {
+    const response = await fetch("http://127.0.0.1:8000/projects/from-chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Sohbetten proje oluşturma endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
+  function buildProjectCreatedReply(result: ProjectFromChatResult) {
+    if (!result.success) {
+      return result.message || "Projeyi oluşturamadım Mert. Backend tarafını kontrol edelim.";
+    }
+
+    const project = result.project;
+
+    if (!project) {
+      return "Projeyi oluşturdum Mert ama proje detayları boş döndü. Projeler panelinden kontrol edelim.";
+    }
+
+    const goals =
+      project.main_goals?.length > 0
+        ? project.main_goals.map((goal) => `- ${goal}`).join("\n")
+        : "- İlk hedefleri sonra netleştireceğiz.";
+
+    return `Tamam Mert, projeyi oluşturdum: ${project.name}
+
+Tip: ${project.type}
+Durum: ${project.status}
+
+Açıklama:
+${project.description || "Açıklama daha sonra netleştirilecek."}
+
+Ana hedefler:
+${goals}
+
+Projeler panelinden de görebilirsin.`;
+  }
+
   async function loadMemory() {
+    updateTranscribing(false);
     setIsMemoryLoading(true);
 
     try {
@@ -320,7 +447,7 @@ function App() {
       setShowProjectForm(false);
 
       await loadProjects();
-      await checkBackendHealth();
+      await checkBackendHealth({ force: true });
     } catch (error) {
       console.error(error);
       alert("Proje oluşturulamadı. Backend çalışıyor mu kontrol edelim.");
@@ -340,7 +467,7 @@ function App() {
       }
 
       await loadProjects();
-      await checkBackendHealth();
+      await checkBackendHealth({ force: true });
     } catch (error) {
       console.error(error);
       alert("Proje silinemedi. Backend çalışıyor mu kontrol edelim.");
@@ -348,7 +475,7 @@ function App() {
   }
 
   async function startVoiceRecording() {
-    if (isRecording || isSending || isTranscribing) {
+    if (isRecordingRef.current || isSendingRef.current || isTranscribingRef.current) {
       return;
     }
 
@@ -358,7 +485,8 @@ function App() {
     }
 
     stopSpeaking();
-    setIsRecording(true);
+    setBusyState(true);
+    updateRecording(true);
     setVoiceStatus("Mikrofon kaydı başladı. Konuşabilirsin.");
 
     try {
@@ -373,27 +501,29 @@ function App() {
       const data = await response.json();
 
       if (!data?.success) {
-        setIsRecording(false);
+        updateRecording(false);
+        setBusyState(false);
         setVoiceStatus(data?.message ?? "Kayıt başlatılamadı.");
         alert(data?.message ?? "Kayıt başlatılamadı.");
       }
     } catch (error) {
       console.error(error);
-      setIsRecording(false);
-      setBackendStatus("offline");
-      setBackendMessage("Backend kapalı veya ses endpoint’i ulaşılamıyor.");
+      updateRecording(false);
+      setBusyState(false);
       setVoiceStatus("Kayıt başlatılamadı.");
       alert("Kayıt başlatılamadı. Backend açık mı kontrol edelim.");
+      await checkBackendHealth({ force: true });
     }
   }
 
   async function stopVoiceRecordingAndTranscribe() {
-    if (!isRecording || isTranscribing) {
+    if (!isRecordingRef.current || isTranscribingRef.current) {
       return;
     }
 
-    setIsRecording(false);
-    setIsTranscribing(true);
+    updateRecording(false);
+    updateTranscribing(true);
+    setBusyState(true);
     setVoiceStatus("Kayıt durduruldu. Whisper yazıya çeviriyor...");
 
     try {
@@ -423,21 +553,84 @@ function App() {
         setVoiceStatus(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
         alert(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
       }
-
-      await checkBackendHealth();
     } catch (error) {
       console.error(error);
-      setBackendStatus("offline");
-      setBackendMessage("Backend kapalı veya ses endpoint’i ulaşılamıyor.");
       setVoiceStatus("Ses yazıya çevrilemedi.");
       alert("Ses yazıya çevrilemedi. Backend açık mı kontrol edelim.");
     } finally {
-      setIsTranscribing(false);
+      updateTranscribing(false);
+      setBusyState(false);
+      await checkBackendHealth({ force: true });
+    }
+  }
+
+
+  async function listenAndTranscribe() {
+    if (isRecordingRef.current || isSendingRef.current || isTranscribingRef.current) {
+      return;
+    }
+
+    if (backendStatus === "offline") {
+      alert("Backend kapalı görünüyor. Önce backend’i başlatalım.");
+      return;
+    }
+
+    stopSpeaking();
+    setBusyState(true);
+    updateRecording(true);
+    setVoiceStatus("Dinliyorum... Konuşman bitince otomatik duracağım.");
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/speech/listen-and-transcribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          max_seconds: 20,
+          silence_seconds: 0.45,
+          peak_threshold: 0.06,
+          average_threshold: 0.008,
+        }),
+      });
+
+      updateRecording(false);
+      updateTranscribing(true);
+      setVoiceStatus("Konuşma bitti. Whisper yazıya çeviriyor...");
+
+      if (!response.ok) {
+        throw new Error("Otomatik dinleme yazıya çevrilemedi.");
+      }
+
+      const data = await response.json();
+
+      if (data?.success && data?.text) {
+        const cleanedText = cleanTranscribedText(data.text);
+        setInput(cleanedText);
+        setVoiceStatus(`Ses metne çevrildi: ${cleanedText}`);
+
+        if (autoSendVoiceEnabled) {
+          setVoiceStatus(`Ses metne çevrildi ve gönderiliyor: ${cleanedText}`);
+          await sendMessage(cleanedText);
+        }
+      } else {
+        setVoiceStatus(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
+        alert(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
+      }
+    } catch (error) {
+      console.error(error);
+      setVoiceStatus("Otomatik ses algılama hata verdi.");
+      alert("Ses yazıya çevrilemedi. Backend açık mı kontrol edelim.");
+    } finally {
+      updateRecording(false);
+      updateTranscribing(false);
+      setBusyState(false);
+      await checkBackendHealth({ force: true });
     }
   }
 
   function toggleVoiceRecording() {
-    if (isRecording) {
+    if (isRecordingRef.current) {
       stopVoiceRecordingAndTranscribe();
     } else {
       startVoiceRecording();
@@ -457,7 +650,7 @@ function App() {
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
-    if (!cleanInput || isSending || (isRecording && !messageOverride)) {
+    if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;
     }
 
@@ -467,6 +660,7 @@ function App() {
     }
 
     stopSpeaking();
+    setBusyState(true);
 
     const userMessage: Message = {
       id: Date.now(),
@@ -481,9 +675,26 @@ function App() {
 
     setMessages((currentMessages) => [...currentMessages, userMessage]);
     setInput("");
-    setIsSending(true);
+    updateSending(true);
 
     try {
+      if (shouldCreateProjectFromChat(cleanInput)) {
+        const projectResult = await createProjectFromChat(cleanInput);
+        const projectReplyText = buildProjectCreatedReply(projectResult);
+
+        const projectReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: projectReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, projectReply]);
+
+        await loadProjects();
+        speakText(projectReplyText);
+        return;
+      }
+
       let memoryMessage: Message | null = null;
 
       if (shouldSaveToMemory(cleanInput)) {
@@ -540,7 +751,6 @@ function App() {
       });
 
       speakText(vexReply.text);
-      await checkBackendHealth();
     } catch (error) {
       const errorReply: Message = {
         id: Date.now() + 3,
@@ -549,11 +759,11 @@ function App() {
       };
 
       setMessages((currentMessages) => [...currentMessages, errorReply]);
-      setBackendStatus("offline");
-      setBackendMessage("Backend kapalı veya ulaşılamıyor.");
       console.error(error);
     } finally {
-      setIsSending(false);
+      updateSending(false);
+      setBusyState(false);
+      await checkBackendHealth({ force: true });
     }
   }
 
@@ -641,7 +851,7 @@ function App() {
                     ? "Kayıt alınıyor..."
                     : isTranscribing
                       ? "Yazıya çevriliyor..."
-                      : "Başlat / durdur ses aktif"}
+                      : "Otomatik dinleme aktif"}
                 </span>
               </div>
             </header>
@@ -662,11 +872,11 @@ function App() {
               <button
                 className={`mic-button ${isRecording ? "recording" : ""}`}
                 type="button"
-                onClick={toggleVoiceRecording}
+                onClick={listenAndTranscribe}
                 disabled={isSending || isTranscribing || backendStatus === "offline"}
-                title={isRecording ? "Kaydı durdur ve yazıya çevir" : "Kaydı başlat"}
+                title="Konuş; sessizlikte otomatik durur"
               >
-                {isRecording ? "Durdur" : isTranscribing ? "Çevriliyor..." : "Mikrofon"}
+                {isRecording ? "Dinliyor..." : isTranscribing ? "Çevriliyor..." : "Mikrofon"}
               </button>
 
               <input

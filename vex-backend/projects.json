@@ -16,5 +16,21 @@
       "Tasarım modern, temiz ve ambalaj sektörüne uygun olmalı.",
       "Ürün görsellerinde ölçü ve oran korunmalı."
     ]
+  },
+  {
+    "id": "airpack-europe",
+    "name": "AirPack Europe",
+    "type": "E-ticaret / Shopify",
+    "status": "aktif",
+    "description": "Avrupa pazarına yönelik airbed ve air column bag ürünlerinin satılacağı global Shopify e-ticaret sitesi projesi.",
+    "main_goals": [
+      "Avrupa pazarı için global bir Shopify sitesi kurmak",
+      "Airbed ve air column bag ürünlerinin satışını gerçekleştirmek",
+      "Premium ve güven veren bir marka imajı oluşturmak"
+    ],
+    "notes": [
+      "Tasarım dili sade, premium ve ambalaj markası disiplininde olmalı",
+      "Güven veren bir marka kimliği ön planda tutulmalı"
+    ]
   }
 ]

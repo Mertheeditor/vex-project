@@ -1,6 +1,10 @@
 import json
 import os
+import queue
+import re
 import tempfile
+import traceback
+import time
 import wave
 from pathlib import Path
 
@@ -24,9 +28,9 @@ WHISPER_MODEL_NAME = "small"
 WHISPER_SAMPLE_RATE = 16000
 WHISPER_CHANNELS = 1
 
-# Mert'in MacBook Pro Microphone cihaz index'i.
-# Daha sonra bunu otomatik cihaz seçimine çevirebiliriz.
-MICROPHONE_DEVICE_INDEX = 1
+# None = sistemin varsayılan mikrofonunu kullanır.
+# Sabit index kullanmıyoruz çünkü cihaz index'i değişebiliyor.
+MICROPHONE_DEVICE_INDEX = None
 
 whisper_model: WhisperModel | None = None
 
@@ -76,8 +80,35 @@ class ProjectRequest(BaseModel):
     notes: list[str] = []
 
 
+class ProjectFromChatRequest(BaseModel):
+    message: str
+
+
 class RecordSpeechRequest(BaseModel):
     duration_seconds: float = 5
+
+
+class ListenSpeechRequest(BaseModel):
+    max_seconds: float = 20
+    silence_seconds: float = 1.2
+    peak_threshold: float = 0.025
+    average_threshold: float = 0.003
+
+
+def get_microphone_device_kwargs() -> dict:
+    if MICROPHONE_DEVICE_INDEX is None:
+        return {}
+
+    return {"device": MICROPHONE_DEVICE_INDEX}
+
+
+def get_gemini_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        return None
+
+    return genai.Client(api_key=api_key)
 
 
 def get_whisper_model() -> WhisperModel:
@@ -128,6 +159,49 @@ def save_recording_to_wav(audio_data: np.ndarray, wav_path: str) -> None:
         wav_file.setsampwidth(2)
         wav_file.setframerate(WHISPER_SAMPLE_RATE)
         wav_file.writeframes(int16_audio.tobytes())
+
+
+def slugify(text: str) -> str:
+    text = text.strip().lower()
+
+    replacements = {
+        "ı": "i",
+        "ğ": "g",
+        "ü": "u",
+        "ş": "s",
+        "ö": "o",
+        "ç": "c",
+        "İ": "i",
+        "Ğ": "g",
+        "Ü": "u",
+        "Ş": "s",
+        "Ö": "o",
+        "Ç": "c",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+
+    return text or "proje"
+
+
+def clean_json_text(text: str) -> str:
+    cleaned = text.strip()
+
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"```$", "", cleaned).strip()
+
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        cleaned = cleaned[first_brace:last_brace + 1]
+
+    return cleaned
 
 
 def load_memory() -> dict:
@@ -196,6 +270,142 @@ def build_projects_text(projects: list[dict]) -> str:
     return json.dumps(projects, ensure_ascii=False, indent=2)
 
 
+def normalize_project_data(project_data: dict) -> dict:
+    name = str(project_data.get("name", "")).strip()
+
+    if not name:
+        name = "Yeni Proje"
+
+    project_id = str(project_data.get("id", "")).strip()
+
+    if not project_id:
+        project_id = slugify(name)
+    else:
+        project_id = slugify(project_id)
+
+    main_goals = project_data.get("main_goals", [])
+    notes = project_data.get("notes", [])
+
+    if not isinstance(main_goals, list):
+        main_goals = [str(main_goals)]
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    return {
+        "id": project_id,
+        "name": name,
+        "type": str(project_data.get("type", "Genel proje")).strip() or "Genel proje",
+        "status": str(project_data.get("status", "aktif")).strip() or "aktif",
+        "description": str(project_data.get("description", "")).strip(),
+        "main_goals": [str(item).strip() for item in main_goals if str(item).strip()],
+        "notes": [str(item).strip() for item in notes if str(item).strip()],
+    }
+
+
+def add_project_to_storage(project_data: dict) -> dict:
+    normalized_project = normalize_project_data(project_data)
+
+    projects_data = load_projects()
+
+    for project in projects_data:
+        if project.get("id") == normalized_project["id"]:
+            return {
+                "success": True,
+                "message": "Bu proje zaten kayıtlı.",
+                "project": project,
+                "projects": projects_data,
+            }
+
+    projects_data.append(normalized_project)
+    save_projects(projects_data)
+
+    return {
+        "success": True,
+        "message": "Proje başarıyla eklendi.",
+        "project": normalized_project,
+        "projects": projects_data,
+    }
+
+
+def extract_project_from_chat(message: str) -> dict:
+    client = get_gemini_client()
+
+    if client is None:
+        fallback_name = message.strip()[:60] or "Yeni Proje"
+
+        return normalize_project_data({
+            "name": fallback_name,
+            "type": "Genel proje",
+            "status": "aktif",
+            "description": message.strip(),
+            "main_goals": [
+                "Proje detaylarını Mert ile netleştirmek"
+            ],
+            "notes": [
+                "Bu proje Gemini API key olmadan basit çıkarımla oluşturuldu."
+            ],
+        })
+
+    prompt = f"""
+Sen Vex'in proje oluşturma modülüsün.
+
+Mert'in mesajından yeni proje bilgisi çıkar.
+
+Sadece geçerli JSON döndür.
+Markdown, açıklama veya ekstra metin yazma.
+
+JSON şeması:
+{{
+  "id": "kebab-case-proje-id",
+  "name": "Proje adı",
+  "type": "Proje tipi",
+  "status": "aktif",
+  "description": "Proje açıklaması",
+  "main_goals": ["Hedef 1", "Hedef 2", "Hedef 3"],
+  "notes": ["Not 1", "Not 2"]
+}}
+
+Kurallar:
+- Mesaj Türkçe ise cevap alanları Türkçe olsun.
+- Proje adı net değilse kısa ve anlamlı bir ad üret.
+- id alanı küçük harfli, Türkçe karaktersiz ve tireli olsun.
+- main_goals listesi en az 2, en fazla 5 madde olsun.
+- notes listesi en az 1, en fazla 4 madde olsun.
+- status varsayılan olarak "aktif" olsun.
+
+Mert'in mesajı:
+{message}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview",
+        contents=prompt,
+    )
+
+    raw_text = response.text or "{}"
+    json_text = clean_json_text(raw_text)
+
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        parsed = {
+            "name": message.strip()[:60] or "Yeni Proje",
+            "type": "Genel proje",
+            "status": "aktif",
+            "description": message.strip(),
+            "main_goals": [
+                "Proje detaylarını netleştirmek",
+                "İlk iş planını oluşturmak"
+            ],
+            "notes": [
+                "Gemini çıktısı JSON olarak okunamadığı için basit proje kaydı oluşturuldu."
+            ],
+        }
+
+    return normalize_project_data(parsed)
+
+
 @app.get("/")
 def root():
     return {
@@ -217,44 +427,33 @@ def projects():
 
 @app.post("/projects")
 def add_project(request: ProjectRequest):
-    clean_id = request.id.strip().lower().replace(" ", "-")
-    clean_name = request.name.strip()
-
-    if not clean_id or not clean_name:
-        return {
-            "success": False,
-            "message": "Proje id ve proje adı boş olamaz.",
-        }
-
-    projects_data = load_projects()
-
-    for project in projects_data:
-        if project.get("id") == clean_id:
-            return {
-                "success": True,
-                "message": "Bu proje zaten kayıtlı.",
-                "project": project,
-                "projects": projects_data,
-            }
-
-    new_project = {
-        "id": clean_id,
-        "name": clean_name,
+    return add_project_to_storage({
+        "id": request.id,
+        "name": request.name,
         "type": request.type,
         "status": request.status,
         "description": request.description,
         "main_goals": request.main_goals,
         "notes": request.notes,
-    }
+    })
 
-    projects_data.append(new_project)
-    save_projects(projects_data)
+
+@app.post("/projects/from-chat")
+def add_project_from_chat(request: ProjectFromChatRequest):
+    clean_message = request.message.strip()
+
+    if not clean_message:
+        return {
+            "success": False,
+            "message": "Boş mesajdan proje oluşturulamaz.",
+        }
+
+    project_data = extract_project_from_chat(clean_message)
+    result = add_project_to_storage(project_data)
 
     return {
-        "success": True,
-        "message": "Proje başarıyla eklendi.",
-        "project": new_project,
-        "projects": projects_data,
+        **result,
+        "source_message": clean_message,
     }
 
 
@@ -395,6 +594,15 @@ async def transcribe_speech(file: UploadFile = File(...)):
 
     try:
         return transcribe_audio_file(temp_path)
+    except Exception as error:
+        print("Vex transcribe hata:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "text": "",
+        }
     finally:
         try:
             os.remove(temp_path)
@@ -406,37 +614,53 @@ async def transcribe_speech(file: UploadFile = File(...)):
 def record_and_transcribe_speech(request: RecordSpeechRequest):
     duration = max(1.0, min(float(request.duration_seconds), 20.0))
 
-    print(f"Vex mikrofon kaydı başlıyor: {duration} saniye")
-    print("Şimdi konuşabilirsin Mert...")
-
-    audio_data = sd.rec(
-        int(duration * WHISPER_SAMPLE_RATE),
-        samplerate=WHISPER_SAMPLE_RATE,
-        channels=WHISPER_CHANNELS,
-        dtype="float32",
-        device=MICROPHONE_DEVICE_INDEX,
-    )
-
-    sd.wait()
-
-    print("Vex mikrofon kaydı bitti, yazıya çevriliyor...")
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-        temp_path = temp_audio.name
-
     try:
-        save_recording_to_wav(audio_data, temp_path)
-        result = transcribe_audio_file(temp_path)
+        print(f"Vex mikrofon kaydı başlıyor: {duration} saniye")
+        print("Şimdi konuşabilirsin Mert...")
+
+        audio_data = sd.rec(
+            int(duration * WHISPER_SAMPLE_RATE),
+            samplerate=WHISPER_SAMPLE_RATE,
+            channels=WHISPER_CHANNELS,
+            dtype="float32",
+            **get_microphone_device_kwargs(),
+        )
+
+        sd.wait()
+
+        print("Vex mikrofon kaydı bitti, yazıya çevriliyor...")
+
+        max_volume = float(np.max(np.abs(audio_data))) if audio_data.size else 0
+        average_volume = float(np.mean(np.abs(audio_data))) if audio_data.size else 0
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            temp_path = temp_audio.name
+
+        try:
+            save_recording_to_wav(audio_data, temp_path)
+            result = transcribe_audio_file(temp_path)
+
+            return {
+                **result,
+                "duration_seconds": duration,
+                "max_volume": max_volume,
+                "average_volume": average_volume,
+            }
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+    except Exception as error:
+        print("Vex record-and-transcribe hata:")
+        traceback.print_exc()
 
         return {
-            **result,
-            "duration_seconds": duration,
+            "success": False,
+            "message": str(error),
+            "text": "",
         }
-    finally:
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
 
 
 @app.post("/speech/record/start")
@@ -445,37 +669,51 @@ def start_speech_recording():
     global recording_chunks
     global is_recording_active
 
-    if is_recording_active:
+    try:
+        if is_recording_active:
+            return {
+                "success": False,
+                "message": "Kayıt zaten devam ediyor.",
+            }
+
+        recording_chunks = []
+
+        def audio_callback(indata, frames, time, status):
+            if status:
+                print(f"Vex kayıt uyarısı: {status}")
+
+            recording_chunks.append(indata.copy())
+
+        print("Vex manuel mikrofon kaydı başladı. Mert konuşabilir.")
+
+        recording_stream = sd.InputStream(
+            samplerate=WHISPER_SAMPLE_RATE,
+            channels=WHISPER_CHANNELS,
+            dtype="float32",
+            callback=audio_callback,
+            **get_microphone_device_kwargs(),
+        )
+
+        recording_stream.start()
+        is_recording_active = True
+
         return {
-            "success": False,
-            "message": "Kayıt zaten devam ediyor.",
+            "success": True,
+            "message": "Kayıt başladı.",
         }
 
-    recording_chunks = []
+    except Exception as error:
+        recording_stream = None
+        recording_chunks = []
+        is_recording_active = False
 
-    def audio_callback(indata, frames, time, status):
-        if status:
-            print(f"Vex kayıt uyarısı: {status}")
+        print("Vex kayıt başlatma hatası:")
+        traceback.print_exc()
 
-        recording_chunks.append(indata.copy())
-
-    print("Vex manuel mikrofon kaydı başladı. Mert konuşabilir.")
-
-    recording_stream = sd.InputStream(
-        samplerate=WHISPER_SAMPLE_RATE,
-        channels=WHISPER_CHANNELS,
-        dtype="float32",
-        callback=audio_callback,
-        device=MICROPHONE_DEVICE_INDEX,
-    )
-
-    recording_stream.start()
-    is_recording_active = True
-
-    return {
-        "success": True,
-        "message": "Kayıt başladı.",
-    }
+        return {
+            "success": False,
+            "message": str(error),
+        }
 
 
 @app.post("/speech/record/stop-and-transcribe")
@@ -484,52 +722,246 @@ def stop_speech_recording_and_transcribe():
     global recording_chunks
     global is_recording_active
 
-    if not is_recording_active or recording_stream is None:
-        return {
-            "success": False,
-            "message": "Aktif kayıt bulunamadı.",
-            "text": "",
-        }
-
-    print("Vex manuel mikrofon kaydı durduruluyor...")
-
-    recording_stream.stop()
-    recording_stream.close()
-    recording_stream = None
-    is_recording_active = False
-
-    if not recording_chunks:
-        return {
-            "success": False,
-            "message": "Ses kaydı boş geldi.",
-            "text": "",
-        }
-
-    audio_data = np.concatenate(recording_chunks, axis=0)
-    recording_chunks = []
-
-    max_volume = float(np.max(np.abs(audio_data))) if audio_data.size else 0
-    average_volume = float(np.mean(np.abs(audio_data))) if audio_data.size else 0
-
-    print(f"Vex kayıt ses seviyesi — max: {max_volume}, ortalama: {average_volume}")
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-        temp_path = temp_audio.name
+    temp_path = ""
 
     try:
+        if not is_recording_active or recording_stream is None:
+            return {
+                "success": False,
+                "message": "Aktif kayıt bulunamadı.",
+                "text": "",
+            }
+
+        print("Vex manuel mikrofon kaydı durduruluyor...")
+
+        recording_stream.stop()
+        recording_stream.close()
+        recording_stream = None
+        is_recording_active = False
+
+        if not recording_chunks:
+            return {
+                "success": False,
+                "message": "Ses kaydı boş geldi.",
+                "text": "",
+                "max_volume": 0,
+                "average_volume": 0,
+            }
+
+        audio_data = np.concatenate(recording_chunks, axis=0)
+        recording_chunks = []
+
+        max_volume = float(np.max(np.abs(audio_data))) if audio_data.size else 0
+        average_volume = float(np.mean(np.abs(audio_data))) if audio_data.size else 0
+
+        print(f"Vex kayıt ses seviyesi — max: {max_volume}, ortalama: {average_volume}")
+
+        if max_volume < 0.001:
+            return {
+                "success": False,
+                "message": "Ses çok düşük geldi veya mikrofon sessiz kaldı.",
+                "text": "",
+                "max_volume": max_volume,
+                "average_volume": average_volume,
+            }
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            temp_path = temp_audio.name
+
         save_recording_to_wav(audio_data, temp_path)
         result = transcribe_audio_file(temp_path)
+
+        text = result.get("text", "").strip()
+
+        if not text:
+            return {
+                "success": False,
+                "message": "Whisper ses aldı ama metin çıkaramadı.",
+                "text": "",
+                "language": result.get("language"),
+                "language_probability": result.get("language_probability"),
+                "max_volume": max_volume,
+                "average_volume": average_volume,
+            }
 
         return {
             **result,
             "max_volume": max_volume,
             "average_volume": average_volume,
         }
+
+    except Exception as error:
+        print("Vex kayıt durdurma/transcribe hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "text": "",
+        }
+
     finally:
+        recording_stream = None
+        recording_chunks = []
+        is_recording_active = False
+
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+
+@app.post("/speech/listen-and-transcribe")
+def listen_and_transcribe_speech(request: ListenSpeechRequest):
+    max_seconds = max(2.0, min(float(request.max_seconds), 60.0))
+    silence_seconds = max(0.25, min(float(request.silence_seconds), 5.0))
+    peak_threshold = max(0.001, float(request.peak_threshold))
+    average_threshold = max(0.0005, float(request.average_threshold))
+
+    audio_queue = queue.Queue()
+    collected_chunks: list[np.ndarray] = []
+    pre_buffer_chunks: list[np.ndarray] = []
+
+    block_duration = 0.2
+    block_size = int(WHISPER_SAMPLE_RATE * block_duration)
+    pre_buffer_limit = int(0.8 / block_duration)
+
+    speech_started = False
+    recording_start_time = time.monotonic()
+    speech_start_time = 0.0
+    last_voice_time = 0.0
+
+    print("Vex otomatik dinleme başladı. Mert konuşabilir.")
+
+    def audio_callback(indata, frames, callback_time, status):
+        if status:
+            print(f"Vex otomatik dinleme uyarısı: {status}")
+
+        audio_queue.put(indata.copy())
+
+    try:
+        with sd.InputStream(
+            samplerate=WHISPER_SAMPLE_RATE,
+            channels=WHISPER_CHANNELS,
+            dtype="float32",
+            blocksize=block_size,
+            callback=audio_callback,
+            **get_microphone_device_kwargs(),
+        ):
+            while True:
+                now = time.monotonic()
+
+                if now - recording_start_time > max_seconds:
+                    print("Vex otomatik dinleme maksimum süreye ulaştı.")
+                    break
+
+                try:
+                    chunk = audio_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
+                chunk_peak = float(np.max(np.abs(chunk))) if chunk.size else 0
+                chunk_average = float(np.mean(np.abs(chunk))) if chunk.size else 0
+
+                has_voice = (
+                    chunk_peak >= peak_threshold or
+                    chunk_average >= average_threshold
+                )
+
+                if not speech_started:
+                    pre_buffer_chunks.append(chunk)
+
+                    if len(pre_buffer_chunks) > pre_buffer_limit:
+                        pre_buffer_chunks.pop(0)
+
+                    if has_voice:
+                        speech_started = True
+                        speech_start_time = now
+                        last_voice_time = now
+                        collected_chunks.extend(pre_buffer_chunks)
+                        pre_buffer_chunks = []
+                        collected_chunks.append(chunk)
+                        print("Vex konuşmayı algıladı.")
+                else:
+                    collected_chunks.append(chunk)
+
+                    if has_voice:
+                        last_voice_time = now
+
+                    speech_duration = now - speech_start_time
+                    silence_duration = now - last_voice_time
+
+                    if speech_duration >= 0.6 and silence_duration >= silence_seconds:
+                        print("Vex sessizliği algıladı, kayıt otomatik duruyor.")
+                        break
+
+        if not collected_chunks:
+            return {
+                "success": False,
+                "message": "Konuşma algılanmadı.",
+                "text": "",
+                "max_volume": 0,
+                "average_volume": 0,
+            }
+
+        audio_data = np.concatenate(collected_chunks, axis=0)
+
+        max_volume = float(np.max(np.abs(audio_data))) if audio_data.size else 0
+        average_volume = float(np.mean(np.abs(audio_data))) if audio_data.size else 0
+
+        print(f"Vex otomatik kayıt ses seviyesi — max: {max_volume}, ortalama: {average_volume}")
+
+        if max_volume < 0.001:
+            return {
+                "success": False,
+                "message": "Ses çok düşük geldi veya mikrofon sessiz kaldı.",
+                "text": "",
+                "max_volume": max_volume,
+                "average_volume": average_volume,
+            }
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            temp_path = temp_audio.name
+
         try:
-            os.remove(temp_path)
-        except OSError:
-            pass
+            save_recording_to_wav(audio_data, temp_path)
+            result = transcribe_audio_file(temp_path)
+
+            text = result.get("text", "").strip()
+
+            if not text:
+                return {
+                    "success": False,
+                    "message": "Whisper ses aldı ama metin çıkaramadı.",
+                    "text": "",
+                    "language": result.get("language"),
+                    "language_probability": result.get("language_probability"),
+                    "max_volume": max_volume,
+                    "average_volume": average_volume,
+                }
+
+            return {
+                **result,
+                "max_volume": max_volume,
+                "average_volume": average_volume,
+            }
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+    except Exception as error:
+        print("Vex otomatik dinleme/transcribe hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "text": "",
+        }
 
 
 def build_conversation_text(history: list[ChatMessage], current_message: str) -> str:
@@ -548,14 +980,12 @@ def build_conversation_text(history: list[ChatMessage], current_message: str) ->
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    api_key = os.getenv("GEMINI_API_KEY")
+    client = get_gemini_client()
 
-    if not api_key:
+    if client is None:
         return {
             "reply": "Gemini API key bulunamadı. .env dosyasında GEMINI_API_KEY var mı kontrol edelim.",
         }
-
-    client = genai.Client(api_key=api_key)
 
     memory_data = load_memory()
     projects_data = load_projects()
