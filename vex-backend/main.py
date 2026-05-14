@@ -113,6 +113,11 @@ class ApprovalRequest(BaseModel):
     notes: list[str] = []
 
 
+class ApprovalFromChatRequest(BaseModel):
+    message: str
+    project_id: str = ""
+
+
 class RecordSpeechRequest(BaseModel):
     duration_seconds: float = 5
 
@@ -512,6 +517,144 @@ def add_approval_to_storage(approval_data: dict) -> dict:
     }
 
 
+
+def guess_action_type_from_message(message: str) -> str:
+    lower_message = message.lower()
+
+    if "shopify" in lower_message or "ürün" in lower_message or "urun" in lower_message:
+        if "canlı" in lower_message or "canli" in lower_message or "yayın" in lower_message or "yayin" in lower_message:
+            return "shopify_publish"
+
+        if "fiyat" in lower_message:
+            return "shopify_price_update"
+
+        if "sil" in lower_message:
+            return "shopify_delete"
+
+        return "shopify_update"
+
+    if "mail" in lower_message or "e-posta" in lower_message or "email" in lower_message:
+        return "email_send"
+
+    if "dosya" in lower_message and "sil" in lower_message:
+        return "file_delete"
+
+    return "risky_action"
+
+
+def guess_project_id_from_message(message: str, default_project_id: str = "") -> str:
+    lower_message = message.lower()
+
+    if "bilsanpack" in lower_message:
+        return "bilsanpack"
+
+    if "airpack europe" in lower_message or "airpack" in lower_message:
+        return "airpack-europe"
+
+    return default_project_id.strip()
+
+
+def extract_approval_from_chat(message: str, project_id: str = "") -> dict:
+    guessed_project_id = guess_project_id_from_message(message, project_id)
+    guessed_action_type = guess_action_type_from_message(message)
+
+    client = get_gemini_client()
+
+    if client is None:
+        return normalize_approval_data({
+            "title": message.strip()[:80] or "Onay Gereken İşlem",
+            "project_id": guessed_project_id,
+            "action_type": guessed_action_type,
+            "risk_level": "yüksek",
+            "status": "bekliyor",
+            "description": message.strip(),
+            "payload": {
+                "source_message": message.strip()
+            },
+            "notes": [
+                "Bu işlem riskli kabul edildiği için Mert onayına gönderildi."
+            ],
+        })
+
+    projects_data = load_projects()
+    projects_text = json.dumps(projects_data, ensure_ascii=False, indent=2)
+
+    prompt = f"""
+Sen Vex'in Onay Merkezi modülüsün.
+
+Mert'in mesajından riskli işlem için onay isteği çıkar.
+
+Sadece geçerli JSON döndür.
+Markdown, açıklama veya ekstra metin yazma.
+
+Kayıtlı projeler:
+{projects_text}
+
+JSON şeması:
+{{
+  "id": "kebab-case-onay-id",
+  "title": "Onay başlığı",
+  "project_id": "ilgili-proje-id-yoksa-boş",
+  "action_type": "shopify_publish | shopify_update | shopify_delete | shopify_price_update | email_send | file_delete | risky_action",
+  "risk_level": "normal | yüksek | kritik",
+  "status": "bekliyor",
+  "description": "Onay açıklaması",
+  "payload": {{
+    "source_message": "Mert'in orijinal isteği",
+    "detected_action": "algılanan işlem",
+    "target": "işlem hedefi"
+  }},
+  "notes": ["Not 1", "Not 2"]
+}}
+
+Kurallar:
+- Mesaj Türkçe ise alanlar Türkçe olsun.
+- Canlıya alma, yayınlama, silme, fiyat değiştirme ve mail gönderme işlemleri risklidir.
+- Canlıya alma/yayınlama için risk_level "yüksek" olsun.
+- Silme işlemleri için risk_level "kritik" olsun.
+- status her zaman "bekliyor" olsun.
+- Eğer mesajda Bilsanpack geçiyorsa project_id "bilsanpack" olsun.
+- Eğer mesajda AirPack Europe geçiyorsa project_id "airpack-europe" olsun.
+
+Mert'in mesajı:
+{message}
+
+Varsayılan proje id:
+{guessed_project_id}
+
+Tahmini işlem tipi:
+{guessed_action_type}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview",
+        contents=prompt,
+    )
+
+    raw_text = response.text or "{}"
+    json_text = clean_json_text(raw_text)
+
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        parsed = {
+            "title": message.strip()[:80] or "Onay Gereken İşlem",
+            "project_id": guessed_project_id,
+            "action_type": guessed_action_type,
+            "risk_level": "yüksek",
+            "status": "bekliyor",
+            "description": message.strip(),
+            "payload": {
+                "source_message": message.strip()
+            },
+            "notes": [
+                "Gemini çıktısı JSON olarak okunamadığı için basit onay isteği oluşturuldu."
+            ],
+        }
+
+    return normalize_approval_data(parsed)
+
+
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -685,6 +828,30 @@ def add_approval(request: ApprovalRequest):
         "payload": request.payload,
         "notes": request.notes,
     })
+
+
+
+@app.post("/approvals/from-chat")
+def add_approval_from_chat(request: ApprovalFromChatRequest):
+    clean_message = request.message.strip()
+
+    if not clean_message:
+        return {
+            "success": False,
+            "message": "Boş mesajdan onay isteği oluşturulamaz.",
+        }
+
+    approval_data = extract_approval_from_chat(
+        message=clean_message,
+        project_id=request.project_id,
+    )
+
+    result = add_approval_to_storage(approval_data)
+
+    return {
+        **result,
+        "source_message": clean_message,
+    }
 
 
 @app.patch("/approvals/{approval_id}/approve")

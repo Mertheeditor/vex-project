@@ -15,5 +15,42 @@
       "Canlıya alma işlemleri onaysız yapılmamalı.",
       "Mert onay verirse işlem devam edecek."
     ]
+  },
+  {
+    "id": "bilsanpack-air-column-bag-yayinlama",
+    "title": "Shopify Ürün Yayınlama Onayı",
+    "project_id": "bilsanpack",
+    "action_type": "shopify_publish",
+    "risk_level": "yüksek",
+    "status": "bekliyor",
+    "description": "Bilsanpack projesi kapsamında Air Column Bag 20x30 ürününün Shopify üzerinde canlıya alınması için onay bekleniyor.",
+    "payload": {
+      "source_message": "Vex, Bilsanpack sitesinde Air Column Bag 20x30 ürününü Shopify’da canlıya al.",
+      "detected_action": "Ürünü Shopify'da yayına alma",
+      "target": "Air Column Bag 20x30"
+    },
+    "notes": [
+      "Canlıya alma işlemi yüksek riskli kategoriye girmektedir.",
+      "Ürün açıklamalarının ve görsellerinin global marka algısına uygunluğu kontrol edilmelidir."
+    ]
+  },
+  {
+    "id": "bilsanpack-shopify-publish-air-column-bag-20x30",
+    "title": "Shopify Ürün Yayınlama Onayı: Air Column Bag 20x30",
+    "project_id": "bilsanpack",
+    "action_type": "shopify_publish",
+    "risk_level": "yüksek",
+    "status": "bekliyor",
+    "description": "Bilsanpack projesi kapsamında Air Column Bag 20x30 ürününün Shopify mağazasında canlıya alınması işlemi için onay isteniyor.",
+    "payload": {
+      "source_message": "Vex, Bilsanpack sitesinde Air Column Bag 20x30 ürününü Shopify’da canlıya al.",
+      "detected_action": "shopify_publish",
+      "target": "Air Column Bag 20x30"
+    },
+    "notes": [
+      "İşlem sonucunda ürün global mağazada aktif hale gelecektir.",
+      "Canlıya alma işlemi yüksek riskli olarak sınıflandırılmıştır.",
+      "Bilsanpack proje ayarları doğrultusunda işlem yapılacaktır."
+    ]
   }
 ]

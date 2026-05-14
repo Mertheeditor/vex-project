@@ -87,6 +87,14 @@ type ApprovalData = {
   notes: string[];
 };
 
+type ApprovalFromChatResult = {
+  success: boolean;
+  message: string;
+  approval?: ApprovalData;
+  approvals?: ApprovalData[];
+  source_message?: string;
+};
+
 type ActiveView = "chat" | "memory" | "projects" | "tasks" | "approvals";
 type BackendStatus = "checking" | "online" | "offline";
 
@@ -367,6 +375,34 @@ function App() {
     return hasTaskWord && hasCreateIntent;
   }
 
+  function shouldCreateApprovalFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    const riskyWords = [
+      "canlıya al",
+      "canliya al",
+      "yayına al",
+      "yayina al",
+      "yayınla",
+      "yayinla",
+      "shopify’da",
+      "shopify'da",
+      "shopifyda",
+      "ürünü güncelle",
+      "urunu guncelle",
+      "fiyat değiştir",
+      "fiyat degistir",
+      "sil",
+      "mail gönder",
+      "mail gonder",
+      "e-posta gönder",
+      "email gönder",
+      "dosya sil"
+    ];
+
+    return riskyWords.some((word) => lowerText.includes(word));
+  }
+
   async function saveMessageToMemory(text: string): Promise<MemorySaveResult | null> {
     const response = await fetch("http://127.0.0.1:8000/memory/rules/from-chat", {
       method: "POST",
@@ -416,6 +452,24 @@ function App() {
 
     if (!response.ok) {
       throw new Error("Sohbetten görev oluşturma endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
+  async function createApprovalFromChat(text: string): Promise<ApprovalFromChatResult> {
+    const response = await fetch("http://127.0.0.1:8000/approvals/from-chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Sohbetten onay isteği oluşturma endpoint'i cevap vermedi.");
     }
 
     return response.json();
@@ -472,6 +526,31 @@ Açıklama:
 ${task.description || "Açıklama daha sonra netleştirilecek."}
 
 Görevler panelinden takip edebilirsin.`;
+  }
+
+  function buildApprovalCreatedReply(result: ApprovalFromChatResult) {
+    if (!result.success) {
+      return result.message || "Onay isteği oluşturamadım Mert. Backend tarafını kontrol edelim.";
+    }
+
+    const approval = result.approval;
+
+    if (!approval) {
+      return "Onay isteğini oluşturdum Mert ama detaylar boş döndü. Onay Merkezi’nden kontrol edelim.";
+    }
+
+    return `Tamam Mert, bu işlem riskli olduğu için direkt yapmadım ve Onay Merkezi’ne aldım.
+
+Onay: ${approval.title}
+Proje: ${approval.project_id || "Genel"}
+İşlem tipi: ${approval.action_type}
+Risk: ${approval.risk_level}
+Durum: ${approval.status}
+
+Açıklama:
+${approval.description || "Açıklama yok."}
+
+Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   }
 
   async function loadMemory() {
@@ -924,6 +1003,23 @@ Görevler panelinden takip edebilirsin.`;
     updateSending(true);
 
     try {
+      if (shouldCreateApprovalFromChat(cleanInput)) {
+        const approvalResult = await createApprovalFromChat(cleanInput);
+        const approvalReplyText = buildApprovalCreatedReply(approvalResult);
+
+        const approvalReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: approvalReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, approvalReply]);
+
+        await loadApprovals();
+        speakText(approvalReplyText);
+        return;
+      }
+
       if (shouldCreateProjectFromChat(cleanInput)) {
         const projectResult = await createProjectFromChat(cleanInput);
         const projectReplyText = buildProjectCreatedReply(projectResult);
