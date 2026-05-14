@@ -839,6 +839,85 @@ Mert'in mesajı:
 
 
 
+
+@app.get("/workspace/active-project/detail")
+def active_project_detail():
+    active_data = get_active_project_data()
+    active_project_id = active_data.get("project_id", "")
+    active_project = active_data.get("project")
+
+    tasks_data = load_tasks()
+    approvals_data = load_approvals()
+
+    if not active_project_id or not active_project:
+        return {
+            "success": True,
+            "has_active_project": False,
+            "project_id": "",
+            "project": None,
+            "tasks": [],
+            "open_tasks": [],
+            "high_priority_tasks": [],
+            "approvals": [],
+            "pending_approvals": [],
+            "suggested_next_step": "Önce aktif bir proje seçelim.",
+        }
+
+    project_tasks = [
+        task for task in tasks_data
+        if task.get("project_id") == active_project_id
+    ]
+
+    open_tasks = [
+        task for task in project_tasks
+        if task.get("status", "").lower() != "tamamlandı"
+    ]
+
+    high_priority_tasks = [
+        task for task in open_tasks
+        if task.get("priority", "").lower() in ["yüksek", "kritik"]
+    ]
+
+    project_approvals = [
+        approval for approval in approvals_data
+        if approval.get("project_id") == active_project_id
+    ]
+
+    pending_approvals = [
+        approval for approval in project_approvals
+        if approval.get("status", "").lower() == "bekliyor"
+    ]
+
+    suggested_next_step = f"{active_project.get('name', active_project_id)} için sıradaki işi birlikte netleştirebiliriz."
+
+    if pending_approvals:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için bekleyen onaylar var; önce onları kontrol etmek iyi olur."
+    elif high_priority_tasks:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için yüksek öncelikli görevler var; önce onlardan biriyle başlayalım."
+    elif open_tasks:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için açık görevler var; sıradaki görevi seçebiliriz."
+
+    return {
+        "success": True,
+        "has_active_project": True,
+        "project_id": active_project_id,
+        "project": active_project,
+        "tasks": project_tasks,
+        "open_tasks": open_tasks,
+        "high_priority_tasks": high_priority_tasks,
+        "approvals": project_approvals,
+        "pending_approvals": pending_approvals,
+        "counts": {
+            "tasks": len(project_tasks),
+            "open_tasks": len(open_tasks),
+            "high_priority_tasks": len(high_priority_tasks),
+            "approvals": len(project_approvals),
+            "pending_approvals": len(pending_approvals),
+        },
+        "suggested_next_step": suggested_next_step,
+    }
+
+
 @app.get("/workspace/active-project")
 def active_project():
     return {

@@ -122,6 +122,26 @@ type ActiveProjectResponse = {
   project: ProjectData | null;
 };
 
+type ActiveProjectDetail = {
+  success: boolean;
+  has_active_project: boolean;
+  project_id: string;
+  project: ProjectData | null;
+  tasks: TaskData[];
+  open_tasks: TaskData[];
+  high_priority_tasks: TaskData[];
+  approvals: ApprovalData[];
+  pending_approvals: ApprovalData[];
+  counts?: {
+    tasks: number;
+    open_tasks: number;
+    high_priority_tasks: number;
+    approvals: number;
+    pending_approvals: number;
+  };
+  suggested_next_step: string;
+};
+
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [input, setInput] = useState("");
@@ -135,6 +155,8 @@ function App() {
 
   const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
   const [activeProjectId, setActiveProjectId] = useState("");
+  const [activeProjectDetail, setActiveProjectDetail] = useState<ActiveProjectDetail | null>(null);
+  const [isActiveProjectDetailLoading, setIsActiveProjectDetailLoading] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -177,6 +199,7 @@ function App() {
   useEffect(() => {
     checkBackendHealth({ force: true });
     loadActiveProject();
+    loadActiveProjectDetail();
     loadWorkspaceSummary();
 
     const intervalId = window.setInterval(() => {
@@ -632,6 +655,31 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
+  async function loadActiveProjectDetail() {
+    setIsActiveProjectDetailLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/active-project/detail");
+
+      if (!response.ok) {
+        throw new Error("Aktif proje detayı yüklenemedi.");
+      }
+
+      const data: ActiveProjectDetail = await response.json();
+      setActiveProjectDetail(data);
+
+      if (data.project) {
+        setActiveProject(data.project);
+        setActiveProjectId(data.project_id || data.project.id || "");
+      }
+    } catch (error) {
+      console.error(error);
+      setActiveProjectDetail(null);
+    } finally {
+      setIsActiveProjectDetailLoading(false);
+    }
+  }
+
   async function setProjectAsActive(projectId: string) {
     try {
       const response = await fetch("http://127.0.0.1:8000/workspace/active-project", {
@@ -658,6 +706,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       setActiveProject(data.project);
       setActiveProjectId(data.project_id || "");
 
+      await loadActiveProjectDetail();
       await loadWorkspaceSummary();
       await loadProjects();
       await checkBackendHealth({ force: true });
@@ -1069,6 +1118,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   function openDashboardView() {
     setActiveView("dashboard");
     loadActiveProject();
+    loadActiveProjectDetail();
     loadWorkspaceSummary();
   }
 
@@ -1317,7 +1367,13 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                 <h2>Dashboard</h2>
               </div>
               <div className="topbar-actions">
-                <button className="small-action-button" onClick={loadWorkspaceSummary}>
+                <button
+                  className="small-action-button"
+                  onClick={() => {
+                    loadActiveProjectDetail();
+                    loadWorkspaceSummary();
+                  }}
+                >
                   Yenile
                 </button>
 
@@ -1370,6 +1426,119 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                       </div>
                     </div>
                   </div>
+
+
+                  <div className="memory-section">
+                    <div className="memory-section-header">
+                      <div>
+                        <p className="eyebrow">Aktif proje çalışma alanı</p>
+                        <h3>{activeProject?.name ?? "Aktif proje seçilmedi"}</h3>
+                      </div>
+
+                      <button className="small-action-button" onClick={openProjectsView}>
+                        Proje Seç
+                      </button>
+                    </div>
+
+                    {isActiveProjectDetailLoading ? (
+                      <p className="panel-label">Aktif proje detayı yükleniyor...</p>
+                    ) : activeProjectDetail?.has_active_project ? (
+                      <>
+                        <p className="project-description">
+                          {activeProjectDetail.project?.description}
+                        </p>
+
+                        <div className="memory-grid">
+                          <div className="memory-card">
+                            <p className="panel-label">Bu projedeki açık görevler</p>
+                            <h3>{activeProjectDetail.counts?.open_tasks ?? 0}</h3>
+                          </div>
+
+                          <div className="memory-card">
+                            <p className="panel-label">Yüksek öncelikli görevler</p>
+                            <h3>{activeProjectDetail.counts?.high_priority_tasks ?? 0}</h3>
+                          </div>
+
+                          <div className="memory-card">
+                            <p className="panel-label">Bekleyen onaylar</p>
+                            <h3>{activeProjectDetail.counts?.pending_approvals ?? 0}</h3>
+                          </div>
+                        </div>
+
+                        <div className="project-section">
+                          <p className="panel-label">Vex’in önerdiği sonraki adım</p>
+                          <p>{activeProjectDetail.suggested_next_step}</p>
+                        </div>
+
+                        <div className="project-grid">
+                          <div className="project-card">
+                            <div className="project-card-header">
+                              <div>
+                                <p className="panel-label">Aktif proje görevleri</p>
+                                <h3>Öncelikli işler</h3>
+                              </div>
+                              <button className="small-action-button" onClick={openTasksView}>
+                                Görevlere Git
+                              </button>
+                            </div>
+
+                            <div className="project-section">
+                              {activeProjectDetail.high_priority_tasks.length > 0 ? (
+                                <ul>
+                                  {activeProjectDetail.high_priority_tasks.slice(0, 5).map((task) => (
+                                    <li key={task.id}>
+                                      {task.title} — {task.priority}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : activeProjectDetail.open_tasks.length > 0 ? (
+                                <ul>
+                                  {activeProjectDetail.open_tasks.slice(0, 5).map((task) => (
+                                    <li key={task.id}>
+                                      {task.title} — {task.status}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="panel-label">Bu proje için açık görev yok.</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="project-card">
+                            <div className="project-card-header">
+                              <div>
+                                <p className="panel-label">Aktif proje onayları</p>
+                                <h3>Bekleyen kararlar</h3>
+                              </div>
+                              <button className="small-action-button" onClick={openApprovalsView}>
+                                Onaylara Git
+                              </button>
+                            </div>
+
+                            <div className="project-section">
+                              {activeProjectDetail.pending_approvals.length > 0 ? (
+                                <ul>
+                                  {activeProjectDetail.pending_approvals.slice(0, 5).map((approval) => (
+                                    <li key={approval.id}>
+                                      {approval.title} — {approval.risk_level}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="panel-label">Bu proje için bekleyen onay yok.</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="panel-label">
+                        Aktif proje seçilmedi. Projeler panelinden bir projeyi aktif yapabilirsin.
+                      </p>
+                    )}
+                  </div>
+
 
                   <div className="project-grid">
                     <div className="project-card">
