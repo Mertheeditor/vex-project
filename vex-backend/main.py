@@ -27,6 +27,7 @@ TASKS_PATH = Path("tasks.json")
 APPROVALS_PATH = Path("approvals.json")
 ACTIVE_PROJECT_PATH = Path("active_project.json")
 ACTIVE_TASK_PATH = Path("active_task.json")
+OUTPUTS_PATH = Path("outputs.json")
 
 WHISPER_MODEL_NAME = "small"
 WHISPER_SAMPLE_RATE = 16000
@@ -126,6 +127,23 @@ class ActiveProjectRequest(BaseModel):
 
 class ActiveTaskRequest(BaseModel):
     task_id: str
+
+
+class OutputRequest(BaseModel):
+    id: str = ""
+    title: str
+    project_id: str = ""
+    task_id: str = ""
+    output_type: str = "genel"
+    content: str
+    status: str = "taslak"
+    notes: list[str] = []
+
+
+class OutputFromChatRequest(BaseModel):
+    title: str = ""
+    content: str
+    output_type: str = "genel"
 
 
 class RecordSpeechRequest(BaseModel):
@@ -507,6 +525,8 @@ def add_approval_to_storage(approval_data: dict) -> dict:
     normalized_approval = normalize_approval_data(approval_data)
 
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
+    outputs_data = load_outputs()
 
     existing_ids = {approval.get("id") for approval in approvals_data}
     base_id = normalized_approval["id"]
@@ -731,6 +751,137 @@ def get_active_task_data() -> dict:
     }
 
 
+
+def load_outputs() -> list[dict]:
+    if not OUTPUTS_PATH.exists():
+        return []
+
+    with OUTPUTS_PATH.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_outputs(outputs: list[dict]) -> None:
+    with OUTPUTS_PATH.open("w", encoding="utf-8") as file:
+        json.dump(outputs, file, ensure_ascii=False, indent=2)
+
+
+def normalize_output_data(output_data: dict) -> dict:
+    title = str(output_data.get("title", "")).strip()
+
+    if not title:
+        title = "Yeni Çıktı"
+
+    output_id = str(output_data.get("id", "")).strip()
+
+    if not output_id:
+        output_id = slugify(title)
+    else:
+        output_id = slugify(output_id)
+
+    notes = output_data.get("notes", [])
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    return {
+        "id": output_id,
+        "title": title,
+        "project_id": str(output_data.get("project_id", "")).strip(),
+        "task_id": str(output_data.get("task_id", "")).strip(),
+        "output_type": str(output_data.get("output_type", "genel")).strip() or "genel",
+        "content": str(output_data.get("content", "")).strip(),
+        "status": str(output_data.get("status", "taslak")).strip() or "taslak",
+        "notes": [str(item).strip() for item in notes if str(item).strip()],
+    }
+
+
+def add_output_to_storage(output_data: dict) -> dict:
+    normalized_output = normalize_output_data(output_data)
+
+    if not normalized_output["content"]:
+        return {
+            "success": False,
+            "message": "Boş içerik çıktı olarak kaydedilemez.",
+            "output": None,
+            "outputs": load_outputs(),
+        }
+
+    outputs_data = load_outputs()
+
+    existing_ids = {output.get("id") for output in outputs_data}
+    base_id = normalized_output["id"]
+    counter = 2
+
+    while normalized_output["id"] in existing_ids:
+        normalized_output["id"] = f"{base_id}-{counter}"
+        counter += 1
+
+    outputs_data.append(normalized_output)
+    save_outputs(outputs_data)
+
+    return {
+        "success": True,
+        "message": "Çıktı başarıyla kaydedildi.",
+        "output": normalized_output,
+        "outputs": outputs_data,
+    }
+
+
+def guess_output_type_from_text(title: str, content: str) -> str:
+    combined = f"{title} {content}".lower()
+
+    if "hero" in combined or "ana sayfa" in combined:
+        return "hero_metni"
+
+    if "seo" in combined or "meta" in combined:
+        return "seo_metni"
+
+    if "ürün" in combined or "urun" in combined or "product" in combined:
+        return "urun_metni"
+
+    if "sayfa" in combined or "page" in combined:
+        return "sayfa_metni"
+
+    if "plan" in combined:
+        return "plan"
+
+    return "genel"
+
+
+def create_output_from_chat_data(title: str, content: str, output_type: str = "genel") -> dict:
+    active_project_data = get_active_project_data()
+    active_task_data = get_active_task_data()
+
+    active_project_id = active_project_data.get("project_id", "")
+    active_task_id = active_task_data.get("task_id", "")
+
+    clean_title = title.strip()
+
+    if not clean_title:
+        active_task = active_task_data.get("task")
+        if active_task:
+            clean_title = active_task.get("title", "Aktif görev çıktısı")
+        else:
+            clean_title = "Sohbet çıktısı"
+
+    clean_output_type = output_type.strip()
+
+    if clean_output_type == "genel":
+        clean_output_type = guess_output_type_from_text(clean_title, content)
+
+    return normalize_output_data({
+        "title": clean_title,
+        "project_id": active_project_id,
+        "task_id": active_task_id,
+        "output_type": clean_output_type,
+        "content": content,
+        "status": "taslak",
+        "notes": [
+            "Bu çıktı sohbet üzerinden kaydedildi."
+        ],
+    })
+
+
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -930,6 +1081,7 @@ def active_project_detail():
 
     tasks_data = load_tasks()
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
 
     if not active_project_id or not active_project:
         return {
@@ -965,6 +1117,11 @@ def active_project_detail():
         if approval.get("project_id") == active_project_id
     ]
 
+    project_outputs = [
+        output for output in outputs_data
+        if output.get("project_id") == active_project_id
+    ]
+
     pending_approvals = [
         approval for approval in project_approvals
         if approval.get("status", "").lower() == "bekliyor"
@@ -989,12 +1146,15 @@ def active_project_detail():
         "high_priority_tasks": high_priority_tasks,
         "approvals": project_approvals,
         "pending_approvals": pending_approvals,
+        "outputs": project_outputs,
         "counts": {
             "tasks": len(project_tasks),
             "open_tasks": len(open_tasks),
             "high_priority_tasks": len(high_priority_tasks),
             "approvals": len(project_approvals),
             "pending_approvals": len(pending_approvals),
+            "outputs": len(project_outputs),
+            "outputs": len(outputs_data),
         },
         "suggested_next_step": suggested_next_step,
     }
@@ -1048,6 +1208,15 @@ def workspace_summary():
     projects_data = load_projects()
     tasks_data = load_tasks()
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
+
+    active_project_data = get_active_project_data()
+    active_project = active_project_data.get("project")
+    active_project_id = active_project_data.get("project_id", "")
+
+    active_task_data = get_active_task_data()
+    active_task = active_task_data.get("task")
+    active_task_id = active_task_data.get("task_id", "")
 
     active_projects = [
         project for project in projects_data
@@ -1069,30 +1238,82 @@ def workspace_summary():
         if approval.get("status", "").lower() == "bekliyor"
     ]
 
+    active_project_tasks = [
+        task for task in tasks_data
+        if active_project_id and task.get("project_id") == active_project_id
+    ]
+
+    active_project_open_tasks = [
+        task for task in active_project_tasks
+        if task.get("status", "").lower() != "tamamlandı"
+    ]
+
+    active_project_high_priority_tasks = [
+        task for task in active_project_open_tasks
+        if task.get("priority", "").lower() in ["yüksek", "kritik"]
+    ]
+
+    active_project_approvals = [
+        approval for approval in approvals_data
+        if active_project_id and approval.get("project_id") == active_project_id
+    ]
+
+    active_project_pending_approvals = [
+        approval for approval in active_project_approvals
+        if approval.get("status", "").lower() == "bekliyor"
+    ]
+
+    active_project_outputs = [
+        output for output in outputs_data
+        if active_project_id and output.get("project_id") == active_project_id
+    ]
+
     suggested_next_step = "Bugün önce açık görevleri ve bekleyen onayları kontrol edelim."
 
-    if pending_approvals:
+    if active_project and active_project_pending_approvals:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için bekleyen onaylar var; önce Onay Merkezi’ni kontrol etmek iyi olur."
+    elif active_project and active_project_high_priority_tasks:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için yüksek öncelikli görevler var; önce onlardan biriyle başlamak iyi olur."
+    elif pending_approvals:
         suggested_next_step = "Bekleyen onaylar var; önce Onay Merkezi’ni kontrol etmek iyi olur."
     elif high_priority_tasks:
         suggested_next_step = "Yüksek öncelikli görevler var; önce onlardan biriyle başlamak iyi olur."
+    elif active_project:
+        suggested_next_step = f"Aktif proje olarak {active_project.get('name', active_project_id)} üzerinden devam edebiliriz."
     elif active_projects:
         suggested_next_step = f"Aktif proje olarak {active_projects[0].get('name', 'ilk proje')} üzerinden devam edebiliriz."
 
     return {
         "success": True,
+        "active_project": active_project,
+        "active_project_id": active_project_id,
+        "active_task": active_task,
+        "active_task_id": active_task_id,
         "counts": {
             "active_projects": len(active_projects),
             "open_tasks": len(open_tasks),
             "high_priority_tasks": len(high_priority_tasks),
             "pending_approvals": len(pending_approvals),
+            "outputs": len(outputs_data),
         },
         "active_projects": active_projects,
         "open_tasks": open_tasks,
         "high_priority_tasks": high_priority_tasks,
         "pending_approvals": pending_approvals,
+        "outputs": outputs_data,
+        "active_project_context": {
+            "project": active_project,
+            "open_tasks": active_project_open_tasks,
+            "high_priority_tasks": active_project_high_priority_tasks,
+            "pending_approvals": active_project_pending_approvals,
+            "outputs": active_project_outputs,
+            "all_project_tasks_count": len(active_project_tasks),
+            "open_project_tasks_count": len(active_project_open_tasks),
+            "pending_project_approvals_count": len(active_project_pending_approvals),
+            "project_outputs_count": len(active_project_outputs),
+        },
         "suggested_next_step": suggested_next_step,
     }
-
 
 @app.get("/")
 def root():
@@ -1103,6 +1324,81 @@ def root():
     }
 
 
+
+
+
+@app.get("/outputs")
+def outputs():
+    return load_outputs()
+
+
+@app.post("/outputs")
+def add_output(request: OutputRequest):
+    return add_output_to_storage({
+        "id": request.id,
+        "title": request.title,
+        "project_id": request.project_id,
+        "task_id": request.task_id,
+        "output_type": request.output_type,
+        "content": request.content,
+        "status": request.status,
+        "notes": request.notes,
+    })
+
+
+@app.post("/outputs/from-chat")
+def add_output_from_chat(request: OutputFromChatRequest):
+    clean_content = request.content.strip()
+
+    if not clean_content:
+        return {
+            "success": False,
+            "message": "Boş sohbet çıktısı kaydedilemez.",
+            "output": None,
+            "outputs": load_outputs(),
+        }
+
+    output_data = create_output_from_chat_data(
+        title=request.title,
+        content=clean_content,
+        output_type=request.output_type,
+    )
+
+    result = add_output_to_storage(output_data)
+
+    return {
+        **result,
+        "active_project": get_active_project_data(),
+        "active_task": get_active_task_data(),
+    }
+
+
+@app.delete("/outputs/{output_id}")
+def delete_output(output_id: str):
+    clean_id = output_id.strip().lower()
+
+    outputs_data = load_outputs()
+    remaining_outputs = [
+        output for output in outputs_data
+        if output.get("id") != clean_id
+    ]
+
+    if len(remaining_outputs) == len(outputs_data):
+        return {
+            "success": False,
+            "message": "Silinecek çıktı bulunamadı.",
+            "output_id": clean_id,
+            "outputs": outputs_data,
+        }
+
+    save_outputs(remaining_outputs)
+
+    return {
+        "success": True,
+        "message": "Çıktı silindi.",
+        "output_id": clean_id,
+        "outputs": remaining_outputs,
+    }
 
 
 @app.get("/approvals")
@@ -1154,6 +1450,7 @@ def approve_approval(approval_id: str):
     clean_id = approval_id.strip().lower()
 
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
 
     for approval in approvals_data:
         if approval.get("id") == clean_id:
@@ -1180,6 +1477,7 @@ def reject_approval(approval_id: str):
     clean_id = approval_id.strip().lower()
 
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
 
     for approval in approvals_data:
         if approval.get("id") == clean_id:
@@ -1206,6 +1504,7 @@ def delete_approval(approval_id: str):
     clean_id = approval_id.strip().lower()
 
     approvals_data = load_approvals()
+    outputs_data = load_outputs()
     remaining_approvals = [
         approval for approval in approvals_data
         if approval.get("id") != clean_id
@@ -1896,43 +2195,102 @@ def chat(request: ChatRequest):
             "reply": "Gemini API key bulunamadı. .env dosyasında GEMINI_API_KEY var mı kontrol edelim.",
         }
 
-    memory_data = load_memory()
-    projects_data = load_projects()
-    tasks_data = load_tasks()
-    approvals_data = load_approvals()
+    try:
+        memory_data = load_memory()
+        projects_data = load_projects()
+        tasks_data = load_tasks()
+        approvals_data = load_approvals()
+        outputs_data = load_outputs()
 
-    open_tasks = [
-        task for task in tasks_data
-        if task.get("status", "").lower() != "tamamlandı"
-    ]
+        active_project_data = get_active_project_data()
+        active_task_data = get_active_task_data()
 
-    high_priority_tasks = [
-        task for task in open_tasks
-        if task.get("priority", "").lower() in ["yüksek", "kritik"]
-    ]
+        active_project_id = active_project_data.get("project_id", "")
+        active_project = active_project_data.get("project")
+        active_task = active_task_data.get("task")
 
-    pending_approvals = [
-        approval for approval in approvals_data
-        if approval.get("status", "").lower() == "bekliyor"
-    ]
+        open_tasks = [
+            task for task in tasks_data
+            if task.get("status", "").lower() != "tamamlandı"
+        ]
 
-    workspace_summary_data = {
-        "counts": {
-            "projects": len(projects_data),
-            "open_tasks": len(open_tasks),
-            "high_priority_tasks": len(high_priority_tasks),
-            "pending_approvals": len(pending_approvals),
-        },
-        "open_tasks": open_tasks[:10],
-        "high_priority_tasks": high_priority_tasks[:10],
-        "pending_approvals": pending_approvals[:10],
-    }
+        high_priority_tasks = [
+            task for task in open_tasks
+            if task.get("priority", "").lower() in ["yüksek", "kritik"]
+        ]
 
-    memory_text = build_memory_text(memory_data)
-    projects_text = build_projects_text(projects_data)
-    workspace_text = json.dumps(workspace_summary_data, ensure_ascii=False, indent=2)
+        pending_approvals = [
+            approval for approval in approvals_data
+            if approval.get("status", "").lower() == "bekliyor"
+        ]
 
-    system_context = f"""
+        active_project_tasks = [
+            task for task in tasks_data
+            if active_project_id and task.get("project_id") == active_project_id
+        ]
+
+        active_project_open_tasks = [
+            task for task in active_project_tasks
+            if task.get("status", "").lower() != "tamamlandı"
+        ]
+
+        active_project_high_priority_tasks = [
+            task for task in active_project_open_tasks
+            if task.get("priority", "").lower() in ["yüksek", "kritik"]
+        ]
+
+        active_project_approvals = [
+            approval for approval in approvals_data
+            if active_project_id and approval.get("project_id") == active_project_id
+        ]
+
+        active_project_pending_approvals = [
+            approval for approval in active_project_approvals
+            if approval.get("status", "").lower() == "bekliyor"
+        ]
+
+        active_project_outputs = [
+            output for output in outputs_data
+            if active_project_id and output.get("project_id") == active_project_id
+        ]
+
+        active_task_outputs = [
+            output for output in outputs_data
+            if active_task and output.get("task_id") == active_task.get("id")
+        ]
+
+        workspace_summary_data = {
+            "counts": {
+                "projects": len(projects_data),
+                "open_tasks": len(open_tasks),
+                "high_priority_tasks": len(high_priority_tasks),
+                "pending_approvals": len(pending_approvals),
+                "outputs": len(outputs_data),
+            },
+            "open_tasks": open_tasks[:10],
+            "high_priority_tasks": high_priority_tasks[:10],
+            "pending_approvals": pending_approvals[:10],
+            "outputs": outputs_data[-10:],
+            "active_project": active_project_data,
+            "active_task": active_task_data,
+            "active_outputs_context": {
+                "active_project_outputs": active_project_outputs[-10:],
+                "active_task_outputs": active_task_outputs[-10:],
+            },
+            "active_project_context": {
+                "project": active_project,
+                "open_tasks": active_project_open_tasks[:10],
+                "high_priority_tasks": active_project_high_priority_tasks[:10],
+                "pending_approvals": active_project_pending_approvals[:10],
+                "outputs": active_project_outputs[-10:],
+            },
+        }
+
+        memory_text = build_memory_text(memory_data)
+        projects_text = build_projects_text(projects_data)
+        workspace_text = json.dumps(workspace_summary_data, ensure_ascii=False, indent=2)
+
+        system_context = f"""
 Senin adın Vex.
 Sen Mert'in kişisel yapay zeka iş arkadaşısın.
 
@@ -1944,7 +2302,7 @@ Aşağıda kayıtlı projeler var. Mert bir proje adı, site adı veya iş bağl
 
 {projects_text}
 
-Aşağıda Dashboard / çalışma alanı özeti var. Mert “bugün ne yapıyoruz”, “öncelik ne”, “nereden devam edelim”, “sıradaki adım ne” gibi şeyler sorarsa bu gerçek veriye göre cevap ver:
+Aşağıda Dashboard / çalışma alanı özeti, aktif proje, aktif görev ve kayıtlı çıktılar var:
 
 {workspace_text}
 
@@ -1961,16 +2319,23 @@ Davranış kuralların:
 - Kayıtlı projeleri hatırla ve ilgili olduğunda bağlam olarak kullan.
 - Eğer bekleyen onay varsa, Mert'e önce Onay Merkezi'ni kontrol etmeyi öner.
 - Eğer yüksek öncelikli görev varsa, Mert'e önce o görevi önermelisin.
-- Eğer hem bekleyen onay hem yüksek öncelikli görev varsa, önce bekleyen onayları söyle, sonra görevleri öner.
-- “Bugün ne yapıyoruz?” sorusunda genel cevap verme; açık görevleri, bekleyen onayları ve aktif projeleri özetle.
+- Eğer aktif proje seçiliyse, Mert kısa ve bağlamsız konuşsa bile varsayılan bağlam olarak aktif projeyi kullan.
+- Eğer aktif görev seçiliyse, Mert “devam et”, “başla”, “bunu hazırla”, “üret”, “yapalım” gibi kısa ifadeler kullandığında aktif görevi bağlam olarak kullan.
+- Aktif görev açıksa mümkünse doğrudan somut ilk çıktıyı üret.
+- Aktif görev tamamlandıysa Mert’e yeni görev seçmesini öner.
+- Mert “kaydettiğimiz çıktı”, “son taslak”, “hero metni”, “kayıtlı metin”, “çıktıları göster” gibi ifadeler kullanırsa kayıtlı outputs verisini kullan.
+- Aktif proje seçiliyse önce aktif projeye ait çıktıları dikkate al.
+- Aktif görev seçiliyse önce aktif göreve bağlı çıktıları dikkate al.
+- Kayıtlı çıktı yoksa bunu açıkça söyle ve yeni çıktı üretmeyi öner.
+- Kayıtlı çıktıyı sorarsa yeniden uydurma; kayıtlı içeriği özetle veya aynen göster.
 """
 
-    conversation_text = build_conversation_text(
-        history=request.history,
-        current_message=request.message,
-    )
+        conversation_text = build_conversation_text(
+            history=request.history,
+            current_message=request.message,
+        )
 
-    prompt = f"""
+        prompt = f"""
 {system_context}
 
 Konuşma geçmişi:
@@ -1979,11 +2344,19 @@ Konuşma geçmişi:
 Vex olarak Mert'e cevap ver.
 """
 
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=prompt,
-    )
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=prompt,
+        )
 
-    return {
-        "reply": response.text,
-    }
+        return {
+            "reply": response.text or "Cevap oluşturdum ama metin boş döndü.",
+        }
+
+    except Exception as error:
+        print("Vex chat endpoint hatası:")
+        traceback.print_exc()
+
+        return {
+            "reply": f"Chat tarafında teknik bir hata oluştu Mert: {str(error)}",
+        }

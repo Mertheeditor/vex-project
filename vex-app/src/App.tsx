@@ -95,7 +95,25 @@ type ApprovalFromChatResult = {
   source_message?: string;
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals";
+type OutputData = {
+  id: string;
+  title: string;
+  project_id: string;
+  task_id: string;
+  output_type: string;
+  content: string;
+  status: string;
+  notes: string[];
+};
+
+type OutputFromChatResult = {
+  success: boolean;
+  message: string;
+  output?: OutputData | null;
+  outputs?: OutputData[];
+};
+
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -112,6 +130,7 @@ type WorkspaceSummary = {
   open_tasks: TaskData[];
   high_priority_tasks: TaskData[];
   pending_approvals: ApprovalData[];
+  outputs?: OutputData[];
   suggested_next_step: string;
 };
 
@@ -139,12 +158,14 @@ type ActiveProjectDetail = {
   high_priority_tasks: TaskData[];
   approvals: ApprovalData[];
   pending_approvals: ApprovalData[];
+  outputs: OutputData[];
   counts?: {
     tasks: number;
     open_tasks: number;
     high_priority_tasks: number;
     approvals: number;
     pending_approvals: number;
+    outputs?: number;
   };
   suggested_next_step: string;
 };
@@ -165,6 +186,8 @@ function App() {
 
   const [activeTask, setActiveTask] = useState<TaskData | null>(null);
   const [activeTaskId, setActiveTaskId] = useState("");
+
+  const [suggestedTaskId, setSuggestedTaskId] = useState("");
   const [activeProjectDetail, setActiveProjectDetail] = useState<ActiveProjectDetail | null>(null);
   const [isActiveProjectDetailLoading, setIsActiveProjectDetailLoading] = useState(false);
 
@@ -185,6 +208,9 @@ function App() {
 
   const [approvals, setApprovals] = useState<ApprovalData[]>([]);
   const [isApprovalsLoading, setIsApprovalsLoading] = useState(false);
+
+  const [outputs, setOutputs] = useState<OutputData[]>([]);
+  const [isOutputsLoading, setIsOutputsLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -306,6 +332,7 @@ function App() {
     if (activeView === "projects") return "Proje merkezi";
     if (activeView === "tasks") return "Görev merkezi";
     if (activeView === "approvals") return "Onay Merkezi";
+    if (activeView === "outputs") return "Çıktılar";
     return "Vex";
   }
 
@@ -440,6 +467,54 @@ function App() {
       lowerText.includes("not al");
 
     return hasTaskWord && hasCreateIntent;
+  }
+
+  function shouldSaveOutputFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    return (
+      lowerText.includes("bunu kaydet") ||
+      lowerText.includes("çıktı olarak kaydet") ||
+      lowerText.includes("cikti olarak kaydet") ||
+      lowerText.includes("taslak olarak kaydet") ||
+      lowerText.includes("proje çıktısı yap") ||
+      lowerText.includes("proje ciktisi yap")
+    );
+  }
+
+  function shouldCompleteActiveTaskFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    return (
+      lowerText.includes("bu görevi kapat") ||
+      lowerText.includes("bu gorevi kapat") ||
+      lowerText.includes("görevi kapat") ||
+      lowerText.includes("gorevi kapat") ||
+      lowerText.includes("görevi tamamla") ||
+      lowerText.includes("gorevi tamamla") ||
+      lowerText.includes("tamamlandı olarak işaretle") ||
+      lowerText.includes("tamamlandi olarak isaretle") ||
+      lowerText.includes("evet kapat") ||
+      lowerText.includes("tamam kapat") ||
+      lowerText.includes("kapatabilirsin") ||
+      lowerText.includes("evet görevi kapat") ||
+      lowerText.includes("evet gorevi kapat")
+    );
+  }
+
+  function shouldActivateSuggestedTaskFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    return (
+      lowerText.includes("evet onu aktif yap") ||
+      lowerText.includes("onu aktif yap") ||
+      lowerText.includes("sıradaki görevi aktif yap") ||
+      lowerText.includes("siradaki gorevi aktif yap") ||
+      lowerText.includes("bunu aktif görev yap") ||
+      lowerText.includes("bunu aktif gorev yap") ||
+      lowerText.includes("o görevden devam edelim") ||
+      lowerText.includes("o gorevden devam edelim")
+    );
   }
 
   function shouldCreateApprovalFromChat(text: string) {
@@ -862,6 +937,26 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
+  async function loadOutputs() {
+    setIsOutputsLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/outputs");
+
+      if (!response.ok) {
+        throw new Error("Çıktılar yüklenemedi.");
+      }
+
+      const data = await response.json();
+      setOutputs(data);
+    } catch (error) {
+      console.error(error);
+      setOutputs([]);
+    } finally {
+      setIsOutputsLoading(false);
+    }
+  }
+
   async function createProject() {
     const cleanName = projectName.trim();
 
@@ -1014,6 +1109,78 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     } catch (error) {
       console.error(error);
       alert("Onay isteği silinemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function saveLastAssistantOutput() {
+    const lastVexMessage = [...messages]
+      .reverse()
+      .find((message) => message.sender === "Vex" && message.text.trim());
+
+    if (!lastVexMessage) {
+      return {
+        success: false,
+        message: "Kaydedilecek Vex çıktısı bulunamadı.",
+        output: null,
+      } as OutputFromChatResult;
+    }
+
+    const response = await fetch("http://127.0.0.1:8000/outputs/from-chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: activeTask?.title || activeProject?.name || "Sohbet çıktısı",
+        output_type: "genel",
+        content: lastVexMessage.text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Çıktı kaydetme endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
+  async function completeActiveTaskFromChat() {
+    if (!activeTaskId) {
+      return {
+        success: false,
+        message: "Aktif görev seçili değil.",
+        task: null,
+      };
+    }
+
+    const response = await fetch(`http://127.0.0.1:8000/tasks/${activeTaskId}/complete`, {
+      method: "PATCH",
+    });
+
+    if (!response.ok) {
+      throw new Error("Aktif görev tamamlanamadı.");
+    }
+
+    return response.json();
+  }
+
+  async function deleteOutput(outputId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/outputs/${outputId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Çıktı silinemedi.");
+      }
+
+      await loadOutputs();
+      await loadWorkspaceSummary();
+      await loadActiveProjectDetail();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Çıktı silinemedi. Backend çalışıyor mu kontrol edelim.");
     }
   }
 
@@ -1211,6 +1378,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     loadApprovals();
   }
 
+  function openOutputsView() {
+    setActiveView("outputs");
+    loadOutputs();
+  }
+
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
@@ -1242,6 +1414,114 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     updateSending(true);
 
     try {
+      if (shouldActivateSuggestedTaskFromChat(cleanInput)) {
+        if (!suggestedTaskId) {
+          const noSuggestedTaskReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: "Şu an aktif yapabileceğim önerilmiş bir görev yok Mert. Görevler panelinden bir görevi aktif seçebiliriz.",
+          };
+
+          setMessages((currentMessages) => [...currentMessages, noSuggestedTaskReply]);
+          speakText(noSuggestedTaskReply.text);
+          return;
+        }
+
+        await setTaskAsActive(suggestedTaskId);
+
+        const activatedTaskReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: "Tamam Mert, önerdiğim görevi aktif görev yaptım. Şimdi bu işten devam edebiliriz.",
+        };
+
+        setMessages((currentMessages) => [...currentMessages, activatedTaskReply]);
+        setSuggestedTaskId("");
+        speakText(activatedTaskReply.text);
+        return;
+      }
+
+      if (shouldCompleteActiveTaskFromChat(cleanInput)) {
+        const completeTaskResult = await completeActiveTaskFromChat();
+
+        const completedTask = completeTaskResult.task;
+
+        const remainingOpenTasks = completeTaskResult.tasks?.filter(
+          (task: TaskData) => task.status !== "tamamlandı"
+        ) ?? [];
+
+        const suggestedTask = remainingOpenTasks.find(
+          (task: TaskData) => task.project_id === activeProjectId
+        ) ?? remainingOpenTasks[0];
+
+        setSuggestedTaskId(suggestedTask?.id ?? "");
+
+        const completeReplyText = completeTaskResult.success && completedTask
+          ? `Tamam Mert, aktif görevi tamamlandı olarak işaretledim.
+
+Görev: ${completedTask.title}
+Proje: ${completedTask.project_id || "Genel"}
+Durum: ${completedTask.status}
+
+${
+  suggestedTask
+    ? `Sırada şu görev var: ${suggestedTask.title}
+
+İstersen bunu aktif görev yapıp buradan devam edebiliriz.`
+    : "Şu an açık görev görünmüyor. İstersen aktif proje için yeni bir görev oluşturabiliriz."
+}`
+          : completeTaskResult.message || "Aktif görevi kapatamadım Mert.";
+
+        const completeReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: completeReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, completeReply]);
+
+        await loadActiveTask();
+        await loadTasks();
+        await loadWorkspaceSummary();
+        await loadActiveProjectDetail();
+        speakText(completeReplyText);
+        return;
+      }
+
+      if (shouldSaveOutputFromChat(cleanInput)) {
+        const outputResult = await saveLastAssistantOutput();
+
+        const outputReplyText = outputResult.success && outputResult.output
+          ? `Tamam Mert, son çıktıyı kaydettim.
+
+Başlık: ${outputResult.output.title}
+Proje: ${outputResult.output.project_id || "Genel"}
+Görev: ${outputResult.output.task_id || "Bağlı görev yok"}
+Tür: ${outputResult.output.output_type}
+Durum: ${outputResult.output.status}
+
+Çıktılar panelinden görebilirsin.${
+  activeTaskId
+    ? "\n\nBu çıktı aktif görevi karşılıyorsa bana “evet kapat” diyebilirsin; görevi tamamlandı yaparım."
+    : ""
+}`
+          : outputResult.message || "Çıktıyı kaydedemedim Mert.";
+
+        const outputReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: outputReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, outputReply]);
+
+        await loadOutputs();
+        await loadWorkspaceSummary();
+        await loadActiveProjectDetail();
+        speakText(outputReplyText);
+        return;
+      }
+
       if (shouldCreateApprovalFromChat(cleanInput)) {
         const approvalResult = await createApprovalFromChat(cleanInput);
         const approvalReplyText = buildApprovalCreatedReply(approvalResult);
@@ -1422,6 +1702,13 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
           >
             Onay Merkezi
           </button>
+
+          <button
+            className={`nav-item ${activeView === "outputs" ? "active" : ""}`}
+            onClick={openOutputsView}
+          >
+            Çıktılar
+          </button>
         </nav>
       </aside>
 
@@ -1483,6 +1770,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                     <div className="memory-card">
                       <p className="panel-label">Bekleyen onay</p>
                       <h3>{workspaceSummary.counts.pending_approvals}</h3>
+                    </div>
+
+                    <div className="memory-card">
+                      <p className="panel-label">Kaydedilen çıktılar</p>
+                      <h3>{workspaceSummary.counts.outputs ?? 0}</h3>
                     </div>
                   </div>
 
@@ -1595,6 +1887,32 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                                 </ul>
                               ) : (
                                 <p className="panel-label">Bu proje için bekleyen onay yok.</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="project-card">
+                            <div className="project-card-header">
+                              <div>
+                                <p className="panel-label">Aktif proje çıktıları</p>
+                                <h3>Kaydedilen taslaklar</h3>
+                              </div>
+                              <button className="small-action-button" onClick={openOutputsView}>
+                                Çıktılara Git
+                              </button>
+                            </div>
+
+                            <div className="project-section">
+                              {activeProjectDetail.outputs?.length > 0 ? (
+                                <ul>
+                                  {activeProjectDetail.outputs.slice(0, 5).map((output) => (
+                                    <li key={output.id}>
+                                      {output.title} — {output.output_type} / {output.status}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="panel-label">Bu proje için kayıtlı çıktı yok.</p>
                               )}
                             </div>
                           </div>
@@ -2204,6 +2522,89 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                   <strong>Bekleyen onay yok.</strong>
                   <p className="panel-label">
                     Riskli işlemler burada Mert onayı bekleyecek.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+
+
+        {activeView === "outputs" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Proje çıktıları</p>
+                <h2>Kaydedilen Çıktılar</h2>
+              </div>
+              <div className="topbar-actions">
+                <button className="small-action-button" onClick={loadOutputs}>
+                  Yenile
+                </button>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {isOutputsLoading ? (
+                <div className="panel-card">
+                  <strong>Çıktılar yükleniyor...</strong>
+                </div>
+              ) : outputs.length > 0 ? (
+                <div className="project-grid">
+                  {outputs.map((output) => (
+                    <div className="project-card" key={output.id}>
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">
+                            {output.project_id ? `Proje: ${output.project_id}` : "Genel çıktı"}
+                          </p>
+                          <h3>{output.title}</h3>
+                        </div>
+
+                        <div className="project-card-actions">
+                          <span className="status-pill">{output.output_type}</span>
+                          <span className="status-pill">{output.status}</span>
+
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => deleteOutput(output.id)}
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="project-section">
+                        <p className="panel-label">Bağlı görev</p>
+                        <ul>
+                          <li>{output.task_id || "Bağlı görev yok"}</li>
+                        </ul>
+                      </div>
+
+                      <div className="project-section">
+                        <p className="panel-label">İçerik</p>
+                        <pre className="payload-preview">{output.content}</pre>
+                      </div>
+
+                      {output.notes?.length > 0 ? (
+                        <div className="project-section">
+                          <p className="panel-label">Notlar</p>
+                          <ul>
+                            {output.notes.map((note, index) => (
+                              <li key={`${output.id}-note-${index}`}>{note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="panel-card">
+                  <strong>Henüz kayıtlı çıktı yok.</strong>
+                  <p className="panel-label">
+                    Vex bir metin ürettikten sonra “bunu kaydet” diyebilirsin.
                   </p>
                 </div>
               )}

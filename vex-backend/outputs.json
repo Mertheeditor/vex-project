@@ -1,0 +1,14 @@
+[
+  {
+    "id": "bilsanpack-hero-metni-taslagi",
+    "title": "Bilsanpack Hero Metni Taslağı",
+    "project_id": "bilsanpack",
+    "task_id": "bilsanpack-hero-metni-hazirlama",
+    "output_type": "hero_metni",
+    "content": "Protect every shipment with confidence. Bilsanpack air column packaging helps your products arrive safely, professionally and ready for the global market.",
+    "status": "taslak",
+    "notes": [
+      "Bu çıktı sohbet üzerinden kaydedildi."
+    ]
+  }
+]
