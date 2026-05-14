@@ -1,0 +1,14 @@
+[
+  {
+    "id": "bilsanpack-hero-metni-hazirlama",
+    "title": "Bilsanpack ana sayfa hero metnini hazırlama",
+    "project_id": "bilsanpack",
+    "status": "tamamlandı",
+    "priority": "yüksek",
+    "description": "Bilsanpack projesi için ana sayfada kullanılacak global marka algısına uygun hero metninin hazırlanması.",
+    "notes": [
+      "Öncelikli görev olarak işaretlendi.",
+      "Global pazara uygun profesyonel ambalaj sitesi konseptine sadık kalınmalı."
+    ]
+  }
+]

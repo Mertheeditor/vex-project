@@ -57,7 +57,25 @@ type ProjectFromChatResult = {
   source_message?: string;
 };
 
-type ActiveView = "chat" | "memory" | "projects";
+type TaskData = {
+  id: string;
+  title: string;
+  project_id: string;
+  status: string;
+  priority: string;
+  description: string;
+  notes: string[];
+};
+
+type TaskFromChatResult = {
+  success: boolean;
+  message: string;
+  task?: TaskData;
+  tasks?: TaskData[];
+  source_message?: string;
+};
+
+type ActiveView = "chat" | "memory" | "projects" | "tasks";
 type BackendStatus = "checking" | "online" | "offline";
 
 function App() {
@@ -79,6 +97,9 @@ function App() {
 
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [isProjectsLoading, setIsProjectsLoading] = useState(false);
+
+  const [tasks, setTasks] = useState<TaskData[]>([]);
+  const [isTasksLoading, setIsTasksLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -187,6 +208,14 @@ function App() {
     if (backendStatus === "online") return "Backend: Bağlı";
     if (backendStatus === "offline") return "Backend: Kapalı";
     return "Backend: Kontrol ediliyor";
+  }
+
+  function getActiveViewLabel() {
+    if (activeView === "chat") return "Genel sohbet";
+    if (activeView === "memory") return "Hafıza merkezi";
+    if (activeView === "projects") return "Proje merkezi";
+    if (activeView === "tasks") return "Görev merkezi";
+    return "Vex";
   }
 
   function slugify(text: string) {
@@ -302,6 +331,26 @@ function App() {
     return hasProjectWord && hasCreateIntent;
   }
 
+  function shouldCreateTaskFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    const hasTaskWord =
+      lowerText.includes("görev") ||
+      lowerText.includes("gorev") ||
+      lowerText.includes("task") ||
+      lowerText.includes("yapılacak") ||
+      lowerText.includes("yapilacak");
+
+    const hasCreateIntent =
+      lowerText.includes("ekle") ||
+      lowerText.includes("oluştur") ||
+      lowerText.includes("olustur") ||
+      lowerText.includes("kaydet") ||
+      lowerText.includes("not al");
+
+    return hasTaskWord && hasCreateIntent;
+  }
+
   async function saveMessageToMemory(text: string): Promise<MemorySaveResult | null> {
     const response = await fetch("http://127.0.0.1:8000/memory/rules/from-chat", {
       method: "POST",
@@ -338,6 +387,24 @@ function App() {
     return response.json();
   }
 
+  async function createTaskFromChat(text: string): Promise<TaskFromChatResult> {
+    const response = await fetch("http://127.0.0.1:8000/tasks/from-chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Sohbetten görev oluşturma endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
   function buildProjectCreatedReply(result: ProjectFromChatResult) {
     if (!result.success) {
       return result.message || "Projeyi oluşturamadım Mert. Backend tarafını kontrol edelim.";
@@ -366,6 +433,29 @@ Ana hedefler:
 ${goals}
 
 Projeler panelinden de görebilirsin.`;
+  }
+
+  function buildTaskCreatedReply(result: TaskFromChatResult) {
+    if (!result.success) {
+      return result.message || "Görevi oluşturamadım Mert. Backend tarafını kontrol edelim.";
+    }
+
+    const task = result.task;
+
+    if (!task) {
+      return "Görevi oluşturdum Mert ama görev detayları boş döndü. Görevler panelinden kontrol edelim.";
+    }
+
+    return `Tamam Mert, görevi ekledim: ${task.title}
+
+Proje: ${task.project_id || "Genel"}
+Durum: ${task.status}
+Öncelik: ${task.priority}
+
+Açıklama:
+${task.description || "Açıklama daha sonra netleştirilecek."}
+
+Görevler panelinden takip edebilirsin.`;
   }
 
   async function loadMemory() {
@@ -406,6 +496,26 @@ Projeler panelinden de görebilirsin.`;
       setProjects([]);
     } finally {
       setIsProjectsLoading(false);
+    }
+  }
+
+  async function loadTasks() {
+    setIsTasksLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/tasks");
+
+      if (!response.ok) {
+        throw new Error("Görevler yüklenemedi.");
+      }
+
+      const data = await response.json();
+      setTasks(data);
+    } catch (error) {
+      console.error(error);
+      setTasks([]);
+    } finally {
+      setIsTasksLoading(false);
     }
   }
 
@@ -471,6 +581,42 @@ Projeler panelinden de görebilirsin.`;
     } catch (error) {
       console.error(error);
       alert("Proje silinemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function completeTask(taskId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/tasks/${taskId}/complete`, {
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error("Görev tamamlanamadı.");
+      }
+
+      await loadTasks();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Görev tamamlanamadı. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function deleteTask(taskId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/tasks/${taskId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Görev silinemedi.");
+      }
+
+      await loadTasks();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Görev silinemedi. Backend çalışıyor mu kontrol edelim.");
     }
   }
 
@@ -647,6 +793,11 @@ Projeler panelinden de görebilirsin.`;
     loadProjects();
   }
 
+  function openTasksView() {
+    setActiveView("tasks");
+    loadTasks();
+  }
+
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
@@ -692,6 +843,23 @@ Projeler panelinden de görebilirsin.`;
 
         await loadProjects();
         speakText(projectReplyText);
+        return;
+      }
+
+      if (shouldCreateTaskFromChat(cleanInput)) {
+        const taskResult = await createTaskFromChat(cleanInput);
+        const taskReplyText = buildTaskCreatedReply(taskResult);
+
+        const taskReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: taskReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, taskReply]);
+
+        await loadTasks();
+        speakText(taskReplyText);
         return;
       }
 
@@ -791,6 +959,13 @@ Projeler panelinden de görebilirsin.`;
             onClick={openProjectsView}
           >
             Projeler
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "tasks" ? "active" : ""}`}
+            onClick={openTasksView}
+          >
+            Görevler
           </button>
 
           <button className="nav-item">Shopify</button>
@@ -1127,6 +1302,91 @@ Projeler panelinden de görebilirsin.`;
             </div>
           </>
         ) : null}
+
+        {activeView === "tasks" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Görev merkezi</p>
+                <h2>Vex Görevleri</h2>
+              </div>
+              <div className="topbar-actions">
+                <button className="small-action-button" onClick={loadTasks}>
+                  Yenile
+                </button>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {isTasksLoading ? (
+                <div className="panel-card">
+                  <strong>Görevler yükleniyor...</strong>
+                </div>
+              ) : tasks.length > 0 ? (
+                <div className="project-grid">
+                  {tasks.map((task) => (
+                    <div className="project-card" key={task.id}>
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">
+                            {task.project_id ? `Proje: ${task.project_id}` : "Genel görev"}
+                          </p>
+                          <h3>{task.title}</h3>
+                        </div>
+
+                        <div className="project-card-actions">
+                          <span className="status-pill">{task.priority}</span>
+                          <span className="status-pill">{task.status}</span>
+
+                          {task.status !== "tamamlandı" ? (
+                            <button
+                              className="small-action-button"
+                              type="button"
+                              onClick={() => completeTask(task.id)}
+                            >
+                              Tamamla
+                            </button>
+                          ) : null}
+
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => deleteTask(task.id)}
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="project-description">
+                        {task.description || "Açıklama yok."}
+                      </p>
+
+                      {task.notes?.length > 0 ? (
+                        <div className="project-section">
+                          <p className="panel-label">Notlar</p>
+                          <ul>
+                            {task.notes.map((note, index) => (
+                              <li key={`${task.id}-note-${index}`}>{note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="panel-card">
+                  <strong>Henüz görev yok.</strong>
+                  <p className="panel-label">
+                    Sohbette “Bilsanpack için şu işi görev olarak ekle” diyebilirsin.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+
       </section>
 
       <aside className="work-panel">
@@ -1140,13 +1400,7 @@ Projeler panelinden de görebilirsin.`;
 
         <div className="panel-card">
           <p className="panel-label">Aktif bölüm</p>
-          <strong>
-            {activeView === "chat"
-              ? "Genel sohbet"
-              : activeView === "memory"
-                ? "Hafıza merkezi"
-                : "Proje merkezi"}
-          </strong>
+          <strong>{getActiveViewLabel()}</strong>
         </div>
 
         <div className="panel-card">

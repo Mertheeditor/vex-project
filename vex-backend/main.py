@@ -23,6 +23,7 @@ app = FastAPI(title="Vex Backend")
 
 MEMORY_PATH = Path("memory.json")
 PROJECTS_PATH = Path("projects.json")
+TASKS_PATH = Path("tasks.json")
 
 WHISPER_MODEL_NAME = "small"
 WHISPER_SAMPLE_RATE = 16000
@@ -82,6 +83,21 @@ class ProjectRequest(BaseModel):
 
 class ProjectFromChatRequest(BaseModel):
     message: str
+
+
+class TaskRequest(BaseModel):
+    id: str = ""
+    title: str
+    project_id: str = ""
+    status: str = "açık"
+    priority: str = "normal"
+    description: str = ""
+    notes: list[str] = []
+
+
+class TaskFromChatRequest(BaseModel):
+    message: str
+    project_id: str = ""
 
 
 class RecordSpeechRequest(BaseModel):
@@ -262,6 +278,154 @@ def save_projects(projects: list[dict]) -> None:
         json.dump(projects, file, ensure_ascii=False, indent=2)
 
 
+
+def load_tasks() -> list[dict]:
+    if not TASKS_PATH.exists():
+        return []
+
+    with TASKS_PATH.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_tasks(tasks: list[dict]) -> None:
+    with TASKS_PATH.open("w", encoding="utf-8") as file:
+        json.dump(tasks, file, ensure_ascii=False, indent=2)
+
+
+def normalize_task_data(task_data: dict) -> dict:
+    title = str(task_data.get("title", "")).strip()
+
+    if not title:
+        title = "Yeni Görev"
+
+    task_id = str(task_data.get("id", "")).strip()
+
+    if not task_id:
+        task_id = slugify(title)
+    else:
+        task_id = slugify(task_id)
+
+    notes = task_data.get("notes", [])
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    return {
+        "id": task_id,
+        "title": title,
+        "project_id": str(task_data.get("project_id", "")).strip(),
+        "status": str(task_data.get("status", "açık")).strip() or "açık",
+        "priority": str(task_data.get("priority", "normal")).strip() or "normal",
+        "description": str(task_data.get("description", "")).strip(),
+        "notes": [str(item).strip() for item in notes if str(item).strip()],
+    }
+
+
+def add_task_to_storage(task_data: dict) -> dict:
+    normalized_task = normalize_task_data(task_data)
+
+    tasks_data = load_tasks()
+
+    existing_ids = {task.get("id") for task in tasks_data}
+    base_id = normalized_task["id"]
+    counter = 2
+
+    while normalized_task["id"] in existing_ids:
+        normalized_task["id"] = f"{base_id}-{counter}"
+        counter += 1
+
+    tasks_data.append(normalized_task)
+    save_tasks(tasks_data)
+
+    return {
+        "success": True,
+        "message": "Görev başarıyla eklendi.",
+        "task": normalized_task,
+        "tasks": tasks_data,
+    }
+
+
+def extract_task_from_chat(message: str, project_id: str = "") -> dict:
+    client = get_gemini_client()
+
+    if client is None:
+        return normalize_task_data({
+            "title": message.strip()[:80] or "Yeni Görev",
+            "project_id": project_id,
+            "status": "açık",
+            "priority": "normal",
+            "description": message.strip(),
+            "notes": [
+                "Bu görev Gemini API key olmadan basit çıkarımla oluşturuldu."
+            ],
+        })
+
+    projects_data = load_projects()
+    projects_text = json.dumps(projects_data, ensure_ascii=False, indent=2)
+
+    prompt = f"""
+Sen Vex'in görev oluşturma modülüsün.
+
+Mert'in mesajından yapılacak görevi çıkar.
+
+Sadece geçerli JSON döndür.
+Markdown, açıklama veya ekstra metin yazma.
+
+Kayıtlı projeler:
+{projects_text}
+
+JSON şeması:
+{{
+  "id": "kebab-case-gorev-id",
+  "title": "Görev başlığı",
+  "project_id": "ilgili-proje-id-yoksa-boş",
+  "status": "açık",
+  "priority": "düşük | normal | yüksek | kritik",
+  "description": "Görev açıklaması",
+  "notes": ["Not 1", "Not 2"]
+}}
+
+Kurallar:
+- Mesaj Türkçe ise alanlar Türkçe olsun.
+- project_id net değilse boş bırak.
+- Eğer mesajda Bilsanpack geçiyorsa project_id "bilsanpack" olsun.
+- Eğer mesajda AirPack Europe geçiyorsa project_id "airpack-europe" olsun.
+- title kısa ve yapılabilir bir iş başlığı olsun.
+- status varsayılan olarak "açık" olsun.
+- priority net değilse "normal" olsun.
+
+Mert'in mesajı:
+{message}
+
+Varsayılan proje id:
+{project_id}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview",
+        contents=prompt,
+    )
+
+    raw_text = response.text or "{}"
+    json_text = clean_json_text(raw_text)
+
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        parsed = {
+            "title": message.strip()[:80] or "Yeni Görev",
+            "project_id": project_id,
+            "status": "açık",
+            "priority": "normal",
+            "description": message.strip(),
+            "notes": [
+                "Gemini çıktısı JSON olarak okunamadığı için basit görev kaydı oluşturuldu."
+            ],
+        }
+
+    return normalize_task_data(parsed)
+
+
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -412,6 +576,102 @@ def root():
         "app": "Vex",
         "status": "Backend çalışıyor",
         "message": "Vex backend hazır.",
+    }
+
+
+
+@app.get("/tasks")
+def tasks():
+    return load_tasks()
+
+
+@app.post("/tasks")
+def add_task(request: TaskRequest):
+    return add_task_to_storage({
+        "id": request.id,
+        "title": request.title,
+        "project_id": request.project_id,
+        "status": request.status,
+        "priority": request.priority,
+        "description": request.description,
+        "notes": request.notes,
+    })
+
+
+@app.post("/tasks/from-chat")
+def add_task_from_chat(request: TaskFromChatRequest):
+    clean_message = request.message.strip()
+
+    if not clean_message:
+        return {
+            "success": False,
+            "message": "Boş mesajdan görev oluşturulamaz.",
+        }
+
+    task_data = extract_task_from_chat(
+        message=clean_message,
+        project_id=request.project_id,
+    )
+
+    result = add_task_to_storage(task_data)
+
+    return {
+        **result,
+        "source_message": clean_message,
+    }
+
+
+@app.patch("/tasks/{task_id}/complete")
+def complete_task(task_id: str):
+    clean_id = task_id.strip().lower()
+
+    tasks_data = load_tasks()
+
+    for task in tasks_data:
+        if task.get("id") == clean_id:
+            task["status"] = "tamamlandı"
+            save_tasks(tasks_data)
+
+            return {
+                "success": True,
+                "message": "Görev tamamlandı.",
+                "task": task,
+                "tasks": tasks_data,
+            }
+
+    return {
+        "success": False,
+        "message": "Tamamlanacak görev bulunamadı.",
+        "task_id": clean_id,
+        "tasks": tasks_data,
+    }
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str):
+    clean_id = task_id.strip().lower()
+
+    tasks_data = load_tasks()
+    remaining_tasks = [
+        task for task in tasks_data
+        if task.get("id") != clean_id
+    ]
+
+    if len(remaining_tasks) == len(tasks_data):
+        return {
+            "success": False,
+            "message": "Silinecek görev bulunamadı.",
+            "task_id": clean_id,
+            "tasks": tasks_data,
+        }
+
+    save_tasks(remaining_tasks)
+
+    return {
+        "success": True,
+        "message": "Görev silindi.",
+        "task_id": clean_id,
+        "tasks": remaining_tasks,
     }
 
 
