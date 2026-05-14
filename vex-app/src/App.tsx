@@ -122,6 +122,13 @@ type ActiveProjectResponse = {
   project: ProjectData | null;
 };
 
+type ActiveTaskResponse = {
+  success: boolean;
+  message?: string;
+  task_id: string;
+  task: TaskData | null;
+};
+
 type ActiveProjectDetail = {
   success: boolean;
   has_active_project: boolean;
@@ -155,6 +162,9 @@ function App() {
 
   const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
   const [activeProjectId, setActiveProjectId] = useState("");
+
+  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState("");
   const [activeProjectDetail, setActiveProjectDetail] = useState<ActiveProjectDetail | null>(null);
   const [isActiveProjectDetailLoading, setIsActiveProjectDetailLoading] = useState(false);
 
@@ -199,6 +209,7 @@ function App() {
   useEffect(() => {
     checkBackendHealth({ force: true });
     loadActiveProject();
+    loadActiveTask();
     loadActiveProjectDetail();
     loadWorkspaceSummary();
 
@@ -652,6 +663,60 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       console.error(error);
       setActiveProject(null);
       setActiveProjectId("");
+    }
+  }
+
+  async function loadActiveTask() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/active-task");
+
+      if (!response.ok) {
+        throw new Error("Aktif görev yüklenemedi.");
+      }
+
+      const data: ActiveTaskResponse = await response.json();
+
+      setActiveTask(data.task);
+      setActiveTaskId(data.task_id || "");
+    } catch (error) {
+      console.error(error);
+      setActiveTask(null);
+      setActiveTaskId("");
+    }
+  }
+
+  async function setTaskAsActive(taskId: string) {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/workspace/active-task", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          task_id: taskId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Aktif görev güncellenemedi.");
+      }
+
+      const data: ActiveTaskResponse = await response.json();
+
+      if (!data.success) {
+        alert(data.message ?? "Aktif görev güncellenemedi.");
+        return;
+      }
+
+      setActiveTask(data.task);
+      setActiveTaskId(data.task_id || "");
+
+      await loadTasks();
+      await loadWorkspaceSummary();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Aktif görev güncellenemedi. Backend çalışıyor mu kontrol edelim.");
     }
   }
 
@@ -1118,6 +1183,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   function openDashboardView() {
     setActiveView("dashboard");
     loadActiveProject();
+    loadActiveTask();
     loadActiveProjectDetail();
     loadWorkspaceSummary();
   }
@@ -1130,11 +1196,13 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   function openProjectsView() {
     setActiveView("projects");
     loadActiveProject();
+    loadActiveTask();
     loadProjects();
   }
 
   function openTasksView() {
     setActiveView("tasks");
+    loadActiveTask();
     loadTasks();
   }
 
@@ -1968,6 +2036,18 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
                         </div>
 
                         <div className="project-card-actions">
+                          {activeTaskId === task.id ? (
+                            <span className="status-pill">Aktif Görev</span>
+                          ) : (
+                            <button
+                              className="small-action-button"
+                              type="button"
+                              onClick={() => setTaskAsActive(task.id)}
+                            >
+                              Aktif Yap
+                            </button>
+                          )}
+
                           <span className="status-pill">{task.priority}</span>
                           <span className="status-pill">{task.status}</span>
 
@@ -2145,6 +2225,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         <div className="panel-card">
           <p className="panel-label">Aktif proje</p>
           <strong>{activeProject?.name ?? "Seçilmedi"}</strong>
+        </div>
+
+        <div className="panel-card">
+          <p className="panel-label">Aktif görev</p>
+          <strong>{activeTask?.title ?? "Seçilmedi"}</strong>
         </div>
 
         <div className="panel-card">

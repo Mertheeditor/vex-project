@@ -26,6 +26,7 @@ PROJECTS_PATH = Path("projects.json")
 TASKS_PATH = Path("tasks.json")
 APPROVALS_PATH = Path("approvals.json")
 ACTIVE_PROJECT_PATH = Path("active_project.json")
+ACTIVE_TASK_PATH = Path("active_task.json")
 
 WHISPER_MODEL_NAME = "small"
 WHISPER_SAMPLE_RATE = 16000
@@ -121,6 +122,10 @@ class ApprovalFromChatRequest(BaseModel):
 
 class ActiveProjectRequest(BaseModel):
     project_id: str
+
+
+class ActiveTaskRequest(BaseModel):
+    task_id: str
 
 
 class RecordSpeechRequest(BaseModel):
@@ -693,6 +698,39 @@ def get_active_project_data() -> dict:
     }
 
 
+
+def load_active_task() -> dict:
+    if not ACTIVE_TASK_PATH.exists():
+        return {"task_id": ""}
+
+    with ACTIVE_TASK_PATH.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_active_task(task_id: str) -> None:
+    with ACTIVE_TASK_PATH.open("w", encoding="utf-8") as file:
+        json.dump({"task_id": task_id}, file, ensure_ascii=False, indent=2)
+
+
+def get_active_task_data() -> dict:
+    active_data = load_active_task()
+    active_task_id = active_data.get("task_id", "")
+
+    tasks_data = load_tasks()
+
+    for task in tasks_data:
+        if task.get("id") == active_task_id:
+            return {
+                "task_id": active_task_id,
+                "task": task,
+            }
+
+    return {
+        "task_id": active_task_id,
+        "task": None,
+    }
+
+
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -838,6 +876,50 @@ Mert'in mesajı:
 
 
 
+
+
+
+@app.get("/workspace/active-task")
+def active_task():
+    return {
+        "success": True,
+        **get_active_task_data(),
+    }
+
+
+@app.post("/workspace/active-task")
+def set_active_task(request: ActiveTaskRequest):
+    clean_task_id = request.task_id.strip().lower()
+
+    if not clean_task_id:
+        save_active_task("")
+
+        return {
+            "success": True,
+            "message": "Aktif görev temizlendi.",
+            "task_id": "",
+            "task": None,
+        }
+
+    tasks_data = load_tasks()
+
+    for task in tasks_data:
+        if task.get("id") == clean_task_id:
+            save_active_task(clean_task_id)
+
+            return {
+                "success": True,
+                "message": "Aktif görev güncellendi.",
+                "task_id": clean_task_id,
+                "task": task,
+            }
+
+    return {
+        "success": False,
+        "message": "Bu id ile kayıtlı görev bulunamadı.",
+        "task_id": clean_task_id,
+        "task": None,
+    }
 
 
 @app.get("/workspace/active-project/detail")
