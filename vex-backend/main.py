@@ -1655,9 +1655,39 @@ def chat(request: ChatRequest):
 
     memory_data = load_memory()
     projects_data = load_projects()
+    tasks_data = load_tasks()
+    approvals_data = load_approvals()
+
+    open_tasks = [
+        task for task in tasks_data
+        if task.get("status", "").lower() != "tamamlandı"
+    ]
+
+    high_priority_tasks = [
+        task for task in open_tasks
+        if task.get("priority", "").lower() in ["yüksek", "kritik"]
+    ]
+
+    pending_approvals = [
+        approval for approval in approvals_data
+        if approval.get("status", "").lower() == "bekliyor"
+    ]
+
+    workspace_summary_data = {
+        "counts": {
+            "projects": len(projects_data),
+            "open_tasks": len(open_tasks),
+            "high_priority_tasks": len(high_priority_tasks),
+            "pending_approvals": len(pending_approvals),
+        },
+        "open_tasks": open_tasks[:10],
+        "high_priority_tasks": high_priority_tasks[:10],
+        "pending_approvals": pending_approvals[:10],
+    }
 
     memory_text = build_memory_text(memory_data)
     projects_text = build_projects_text(projects_data)
+    workspace_text = json.dumps(workspace_summary_data, ensure_ascii=False, indent=2)
 
     system_context = f"""
 Senin adın Vex.
@@ -1671,6 +1701,10 @@ Aşağıda kayıtlı projeler var. Mert bir proje adı, site adı veya iş bağl
 
 {projects_text}
 
+Aşağıda Dashboard / çalışma alanı özeti var. Mert “bugün ne yapıyoruz”, “öncelik ne”, “nereden devam edelim”, “sıradaki adım ne” gibi şeyler sorarsa bu gerçek veriye göre cevap ver:
+
+{workspace_text}
+
 Davranış kuralların:
 - Basit bir bot gibi davranma.
 - Mert ile doğal, pratik ve samimi konuş.
@@ -1682,6 +1716,10 @@ Davranış kuralların:
 - Bir seferde çok fazla şey verme; bir adımı yaptır, sonra kontrol et.
 - Kritik işlemlerde Mert'ten onay al.
 - Kayıtlı projeleri hatırla ve ilgili olduğunda bağlam olarak kullan.
+- Eğer bekleyen onay varsa, Mert'e önce Onay Merkezi'ni kontrol etmeyi öner.
+- Eğer yüksek öncelikli görev varsa, Mert'e önce o görevi önermelisin.
+- Eğer hem bekleyen onay hem yüksek öncelikli görev varsa, önce bekleyen onayları söyle, sonra görevleri öner.
+- “Bugün ne yapıyoruz?” sorusunda genel cevap verme; açık görevleri, bekleyen onayları ve aktif projeleri özetle.
 """
 
     conversation_text = build_conversation_text(
