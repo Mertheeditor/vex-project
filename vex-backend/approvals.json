@@ -1,0 +1,19 @@
+[
+  {
+    "id": "bilsanpack-urununu-canliya-alma-onayi",
+    "title": "Bilsanpack ürününü canlıya alma onayı",
+    "project_id": "bilsanpack",
+    "action_type": "shopify_publish",
+    "risk_level": "yüksek",
+    "status": "onaylandı",
+    "description": "Bilsanpack için hazırlanan ürünün Shopify üzerinde canlıya alınması için Mert onayı gerekiyor.",
+    "payload": {
+      "product_title": "Air Column Bag 20x30",
+      "target": "Shopify ürün yayını"
+    },
+    "notes": [
+      "Canlıya alma işlemleri onaysız yapılmamalı.",
+      "Mert onay verirse işlem devam edecek."
+    ]
+  }
+]

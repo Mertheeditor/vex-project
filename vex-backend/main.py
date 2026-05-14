@@ -24,6 +24,7 @@ app = FastAPI(title="Vex Backend")
 MEMORY_PATH = Path("memory.json")
 PROJECTS_PATH = Path("projects.json")
 TASKS_PATH = Path("tasks.json")
+APPROVALS_PATH = Path("approvals.json")
 
 WHISPER_MODEL_NAME = "small"
 WHISPER_SAMPLE_RATE = 16000
@@ -98,6 +99,18 @@ class TaskRequest(BaseModel):
 class TaskFromChatRequest(BaseModel):
     message: str
     project_id: str = ""
+
+
+class ApprovalRequest(BaseModel):
+    id: str = ""
+    title: str
+    project_id: str = ""
+    action_type: str = "genel"
+    risk_level: str = "normal"
+    status: str = "bekliyor"
+    description: str = ""
+    payload: dict = {}
+    notes: list[str] = []
 
 
 class RecordSpeechRequest(BaseModel):
@@ -426,6 +439,79 @@ Varsayılan proje id:
     return normalize_task_data(parsed)
 
 
+
+def load_approvals() -> list[dict]:
+    if not APPROVALS_PATH.exists():
+        return []
+
+    with APPROVALS_PATH.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_approvals(approvals: list[dict]) -> None:
+    with APPROVALS_PATH.open("w", encoding="utf-8") as file:
+        json.dump(approvals, file, ensure_ascii=False, indent=2)
+
+
+def normalize_approval_data(approval_data: dict) -> dict:
+    title = str(approval_data.get("title", "")).strip()
+
+    if not title:
+        title = "Yeni Onay"
+
+    approval_id = str(approval_data.get("id", "")).strip()
+
+    if not approval_id:
+        approval_id = slugify(title)
+    else:
+        approval_id = slugify(approval_id)
+
+    notes = approval_data.get("notes", [])
+    payload = approval_data.get("payload", {})
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    if not isinstance(payload, dict):
+        payload = {}
+
+    return {
+        "id": approval_id,
+        "title": title,
+        "project_id": str(approval_data.get("project_id", "")).strip(),
+        "action_type": str(approval_data.get("action_type", "genel")).strip() or "genel",
+        "risk_level": str(approval_data.get("risk_level", "normal")).strip() or "normal",
+        "status": str(approval_data.get("status", "bekliyor")).strip() or "bekliyor",
+        "description": str(approval_data.get("description", "")).strip(),
+        "payload": payload,
+        "notes": [str(item).strip() for item in notes if str(item).strip()],
+    }
+
+
+def add_approval_to_storage(approval_data: dict) -> dict:
+    normalized_approval = normalize_approval_data(approval_data)
+
+    approvals_data = load_approvals()
+
+    existing_ids = {approval.get("id") for approval in approvals_data}
+    base_id = normalized_approval["id"]
+    counter = 2
+
+    while normalized_approval["id"] in existing_ids:
+        normalized_approval["id"] = f"{base_id}-{counter}"
+        counter += 1
+
+    approvals_data.append(normalized_approval)
+    save_approvals(approvals_data)
+
+    return {
+        "success": True,
+        "message": "Onay isteği oluşturuldu.",
+        "approval": normalized_approval,
+        "approvals": approvals_data,
+    }
+
+
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -578,6 +664,107 @@ def root():
         "message": "Vex backend hazır.",
     }
 
+
+
+
+@app.get("/approvals")
+def approvals():
+    return load_approvals()
+
+
+@app.post("/approvals")
+def add_approval(request: ApprovalRequest):
+    return add_approval_to_storage({
+        "id": request.id,
+        "title": request.title,
+        "project_id": request.project_id,
+        "action_type": request.action_type,
+        "risk_level": request.risk_level,
+        "status": request.status,
+        "description": request.description,
+        "payload": request.payload,
+        "notes": request.notes,
+    })
+
+
+@app.patch("/approvals/{approval_id}/approve")
+def approve_approval(approval_id: str):
+    clean_id = approval_id.strip().lower()
+
+    approvals_data = load_approvals()
+
+    for approval in approvals_data:
+        if approval.get("id") == clean_id:
+            approval["status"] = "onaylandı"
+            save_approvals(approvals_data)
+
+            return {
+                "success": True,
+                "message": "Onay isteği onaylandı.",
+                "approval": approval,
+                "approvals": approvals_data,
+            }
+
+    return {
+        "success": False,
+        "message": "Onaylanacak istek bulunamadı.",
+        "approval_id": clean_id,
+        "approvals": approvals_data,
+    }
+
+
+@app.patch("/approvals/{approval_id}/reject")
+def reject_approval(approval_id: str):
+    clean_id = approval_id.strip().lower()
+
+    approvals_data = load_approvals()
+
+    for approval in approvals_data:
+        if approval.get("id") == clean_id:
+            approval["status"] = "reddedildi"
+            save_approvals(approvals_data)
+
+            return {
+                "success": True,
+                "message": "Onay isteği reddedildi.",
+                "approval": approval,
+                "approvals": approvals_data,
+            }
+
+    return {
+        "success": False,
+        "message": "Reddedilecek istek bulunamadı.",
+        "approval_id": clean_id,
+        "approvals": approvals_data,
+    }
+
+
+@app.delete("/approvals/{approval_id}")
+def delete_approval(approval_id: str):
+    clean_id = approval_id.strip().lower()
+
+    approvals_data = load_approvals()
+    remaining_approvals = [
+        approval for approval in approvals_data
+        if approval.get("id") != clean_id
+    ]
+
+    if len(remaining_approvals) == len(approvals_data):
+        return {
+            "success": False,
+            "message": "Silinecek onay isteği bulunamadı.",
+            "approval_id": clean_id,
+            "approvals": approvals_data,
+        }
+
+    save_approvals(remaining_approvals)
+
+    return {
+        "success": True,
+        "message": "Onay isteği silindi.",
+        "approval_id": clean_id,
+        "approvals": remaining_approvals,
+    }
 
 
 @app.get("/tasks")

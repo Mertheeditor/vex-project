@@ -75,7 +75,19 @@ type TaskFromChatResult = {
   source_message?: string;
 };
 
-type ActiveView = "chat" | "memory" | "projects" | "tasks";
+type ApprovalData = {
+  id: string;
+  title: string;
+  project_id: string;
+  action_type: string;
+  risk_level: string;
+  status: string;
+  description: string;
+  payload: Record<string, unknown>;
+  notes: string[];
+};
+
+type ActiveView = "chat" | "memory" | "projects" | "tasks" | "approvals";
 type BackendStatus = "checking" | "online" | "offline";
 
 function App() {
@@ -100,6 +112,9 @@ function App() {
 
   const [tasks, setTasks] = useState<TaskData[]>([]);
   const [isTasksLoading, setIsTasksLoading] = useState(false);
+
+  const [approvals, setApprovals] = useState<ApprovalData[]>([]);
+  const [isApprovalsLoading, setIsApprovalsLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -215,6 +230,7 @@ function App() {
     if (activeView === "memory") return "Hafıza merkezi";
     if (activeView === "projects") return "Proje merkezi";
     if (activeView === "tasks") return "Görev merkezi";
+    if (activeView === "approvals") return "Onay Merkezi";
     return "Vex";
   }
 
@@ -519,6 +535,26 @@ Görevler panelinden takip edebilirsin.`;
     }
   }
 
+  async function loadApprovals() {
+    setIsApprovalsLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/approvals");
+
+      if (!response.ok) {
+        throw new Error("Onaylar yüklenemedi.");
+      }
+
+      const data = await response.json();
+      setApprovals(data);
+    } catch (error) {
+      console.error(error);
+      setApprovals([]);
+    } finally {
+      setIsApprovalsLoading(false);
+    }
+  }
+
   async function createProject() {
     const cleanName = projectName.trim();
 
@@ -617,6 +653,60 @@ Görevler panelinden takip edebilirsin.`;
     } catch (error) {
       console.error(error);
       alert("Görev silinemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function approveApproval(approvalId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/approvals/${approvalId}/approve`, {
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error("Onay isteği onaylanamadı.");
+      }
+
+      await loadApprovals();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Onay isteği onaylanamadı. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function rejectApproval(approvalId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/approvals/${approvalId}/reject`, {
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error("Onay isteği reddedilemedi.");
+      }
+
+      await loadApprovals();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Onay isteği reddedilemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function deleteApproval(approvalId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/approvals/${approvalId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Onay isteği silinemedi.");
+      }
+
+      await loadApprovals();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Onay isteği silinemedi. Backend çalışıyor mu kontrol edelim.");
     }
   }
 
@@ -796,6 +886,11 @@ Görevler panelinden takip edebilirsin.`;
   function openTasksView() {
     setActiveView("tasks");
     loadTasks();
+  }
+
+  function openApprovalsView() {
+    setActiveView("approvals");
+    loadApprovals();
   }
 
   async function sendMessage(messageOverride?: string) {
@@ -979,7 +1074,12 @@ Görevler panelinden takip edebilirsin.`;
             Hafıza
           </button>
 
-          <button className="nav-item">Onay Merkezi</button>
+          <button
+            className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
+            onClick={openApprovalsView}
+          >
+            Onay Merkezi
+          </button>
         </nav>
       </aside>
 
@@ -1380,6 +1480,117 @@ Görevler panelinden takip edebilirsin.`;
                   <strong>Henüz görev yok.</strong>
                   <p className="panel-label">
                     Sohbette “Bilsanpack için şu işi görev olarak ekle” diyebilirsin.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+
+
+        {activeView === "approvals" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Onay merkezi</p>
+                <h2>Bekleyen Onaylar</h2>
+              </div>
+              <div className="topbar-actions">
+                <button className="small-action-button" onClick={loadApprovals}>
+                  Yenile
+                </button>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {isApprovalsLoading ? (
+                <div className="panel-card">
+                  <strong>Onaylar yükleniyor...</strong>
+                </div>
+              ) : approvals.length > 0 ? (
+                <div className="project-grid">
+                  {approvals.map((approval) => (
+                    <div className="project-card" key={approval.id}>
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">
+                            {approval.project_id ? `Proje: ${approval.project_id}` : "Genel onay"}
+                          </p>
+                          <h3>{approval.title}</h3>
+                        </div>
+
+                        <div className="project-card-actions">
+                          <span className="status-pill">{approval.risk_level}</span>
+                          <span className="status-pill">{approval.status}</span>
+
+                          {approval.status === "bekliyor" ? (
+                            <>
+                              <button
+                                className="small-action-button"
+                                type="button"
+                                onClick={() => approveApproval(approval.id)}
+                              >
+                                Onayla
+                              </button>
+
+                              <button
+                                className="danger-button"
+                                type="button"
+                                onClick={() => rejectApproval(approval.id)}
+                              >
+                                Reddet
+                              </button>
+                            </>
+                          ) : null}
+
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => deleteApproval(approval.id)}
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="project-description">
+                        {approval.description || "Açıklama yok."}
+                      </p>
+
+                      <div className="project-section">
+                        <p className="panel-label">İşlem tipi</p>
+                        <ul>
+                          <li>{approval.action_type}</li>
+                        </ul>
+                      </div>
+
+                      {approval.payload && Object.keys(approval.payload).length > 0 ? (
+                        <div className="project-section">
+                          <p className="panel-label">İşlem detayları</p>
+                          <pre className="payload-preview">
+                            {JSON.stringify(approval.payload, null, 2)}
+                          </pre>
+                        </div>
+                      ) : null}
+
+                      {approval.notes?.length > 0 ? (
+                        <div className="project-section">
+                          <p className="panel-label">Notlar</p>
+                          <ul>
+                            {approval.notes.map((note, index) => (
+                              <li key={`${approval.id}-note-${index}`}>{note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="panel-card">
+                  <strong>Bekleyen onay yok.</strong>
+                  <p className="panel-label">
+                    Riskli işlemler burada Mert onayı bekleyecek.
                   </p>
                 </div>
               )}

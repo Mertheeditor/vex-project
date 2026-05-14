@@ -541,3 +541,14 @@ input {
   color: #ffe6a6;
   background: rgba(255, 204, 102, 0.14);
 }
+.payload-preview {
+  margin: 0;
+  padding: 12px;
+  border-radius: 14px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(245, 255, 248, 0.9);
+  font-size: 12px;
+  line-height: 1.5;
+}
