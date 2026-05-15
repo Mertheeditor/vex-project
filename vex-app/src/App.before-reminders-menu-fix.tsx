@@ -95,17 +95,6 @@ type ApprovalFromChatResult = {
   source_message?: string;
 };
 
-type ReminderData = {
-  id: string;
-  title: string;
-  remind_at: string;
-  project_id: string;
-  task_id: string;
-  status: string;
-  notified: boolean;
-  notes: string[];
-};
-
 type OutputData = {
   id: string;
   title: string;
@@ -124,7 +113,7 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -222,9 +211,6 @@ function App() {
 
   const [outputs, setOutputs] = useState<OutputData[]>([]);
   const [isOutputsLoading, setIsOutputsLoading] = useState(false);
-
-  const [reminders, setReminders] = useState<ReminderData[]>([]);
-  const [isRemindersLoading, setIsRemindersLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -249,14 +235,6 @@ function App() {
   useEffect(() => {
     checkBackendHealth({ force: true });
 
-    // VEX_REMINDER_INTERVAL_START
-    checkDueReminders();
-
-    const vexReminderInterval = window.setInterval(() => {
-      checkDueReminders();
-    }, 15000);
-    // VEX_REMINDER_INTERVAL_END
-
     const reminderInterval = window.setInterval(() => {
       checkDueReminders();
     }, 30000);
@@ -274,9 +252,6 @@ function App() {
     };
     return () => {
       window.clearInterval(reminderInterval);
-    };
-    return () => {
-      window.clearInterval(vexReminderInterval);
     };
   }, []);
 
@@ -312,86 +287,6 @@ function App() {
     setBackendMessage("Backend bağlantısı kontrol edildi.");
 
     try {
-      const hardReminderText = cleanInput.toLocaleLowerCase("tr-TR");
-      const isHardReminderCommand =
-        hardReminderText.includes("hatırlat") ||
-        hardReminderText.includes("hatirlat") ||
-        hardReminderText.includes("beni uyar") ||
-        hardReminderText.includes("uyar") ||
-        hardReminderText.includes("alarm kur") ||
-        hardReminderText.includes("dakika sonra") ||
-        hardReminderText.includes("saat sonra");
-
-      if (isHardReminderCommand) {
-        try {
-          const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              message: cleanInput,
-              project_id: activeProjectId,
-              task_id: activeTaskId,
-            }),
-          });
-
-          const rawText = await response.text();
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${rawText}`);
-          }
-
-          const reminderResult = JSON.parse(rawText);
-          const reminder = reminderResult.reminder;
-
-          const reminderReplyText =
-            reminderResult.success && reminder
-              ? `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
-              : reminderResult.message || "Hatırlatmayı oluşturamadım Mert.";
-
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
-
-          try {
-            await loadReminders();
-          } catch (loadError) {
-            console.error("Hatırlatma listesi yenilenemedi:", loadError);
-          }
-
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Sert hatırlatma route hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
-      }
-
       let response = await fetch("http://127.0.0.1:8000/health", {
         method: "GET",
         cache: "no-store",
@@ -434,7 +329,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     if (activeView === "tasks") return "Görev merkezi";
     if (activeView === "approvals") return "Onay Merkezi";
     if (activeView === "outputs") return "Çıktılar";
-    if (activeView === "reminders") return "Hatırlatmalar";
     return "Vex";
   }
 
@@ -1156,93 +1050,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
-  async function loadReminders() {
-    setIsRemindersLoading(true);
-
-    try {
-      const response = await fetch("http://127.0.0.1:8000/reminders");
-
-      if (!response.ok) {
-        throw new Error("Hatırlatmalar yüklenemedi.");
-      }
-
-      const data = await response.json();
-      setReminders(data);
-    } catch (error) {
-      console.error(error);
-      setReminders([]);
-    } finally {
-      setIsRemindersLoading(false);
-    }
-  }
-
-
-  async function checkDueReminders() {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/reminders/due", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          mark_as_notified: true,
-        }),
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      const data = await response.json();
-      const dueReminders: ReminderData[] = data?.due_reminders ?? [];
-
-      if (dueReminders.length === 0) {
-        return;
-      }
-
-      const reminderText = dueReminders
-        .map((reminder) => `• ${reminder.title}`)
-        .join("\n");
-
-      const alertText = `Mert, zamanı gelen hatırlatmaların var:\n\n${reminderText}`;
-
-      const reminderMessage: Message = {
-        id: Date.now() + 3,
-        sender: "Vex",
-        text: alertText,
-      };
-
-      setMessages((currentMessages) => [...currentMessages, reminderMessage]);
-
-      try {
-        await loadReminders();
-      } catch (loadError) {
-        console.error("Hatırlatmalar yenilenemedi:", loadError);
-      }
-
-      speakText(alertText);
-    } catch (error) {
-      console.error("Hatırlatma zamanı kontrol hatası:", error);
-    }
-  }
-
-  async function deleteReminder(reminderId: string) {
-    try {
-      const response = await fetch(`http://127.0.0.1:8000/reminders/${reminderId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        throw new Error("Hatırlatma silinemedi.");
-      }
-
-      await loadReminders();
-    } catch (error) {
-      console.error(error);
-      alert("Hatırlatma silinemedi. Backend çalışıyor mu kontrol edelim.");
-    }
-  }
-
   async function createProject() {
     const cleanName = projectName.trim();
 
@@ -1669,11 +1476,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     loadOutputs();
   }
 
-  function openRemindersView() {
-    setActiveView("reminders");
-    loadReminders();
-  }
-
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
@@ -1735,121 +1537,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     updateSending(true);
 
     try {
-      // VEX_HARD_REMINDER_ROUTE_START
-      const hardReminderText = cleanInput.toLocaleLowerCase("tr-TR");
-      const isHardReminderCommand =
-        hardReminderText.includes("hatırlat") ||
-        hardReminderText.includes("hatirlat") ||
-        hardReminderText.includes("beni uyar") ||
-        hardReminderText.includes("alarm kur") ||
-        hardReminderText.includes("dakika sonra") ||
-        hardReminderText.includes("saat sonra");
-
-      if (isHardReminderCommand) {
-        try {
-          const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              message: cleanInput,
-              project_id: activeProjectId,
-              task_id: activeTaskId,
-            }),
-          });
-
-          const rawText = await response.text();
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${rawText}`);
-          }
-
-          const reminderResult = JSON.parse(rawText);
-          const reminder = reminderResult.reminder;
-
-          const reminderReplyText =
-            reminderResult.success && reminder
-              ? `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
-              : reminderResult.message || "Hatırlatmayı oluşturamadım Mert.";
-
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
-
-          try {
-            await loadReminders();
-          } catch (loadError) {
-            console.error("Hatırlatma listesi yenilenemedi:", loadError);
-          }
-
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Hatırlatma route hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
-      }
-      // VEX_HARD_REMINDER_ROUTE_END
-      if (shouldCreateReminderFromChat(cleanInput)) {
-        try {
-          const reminderResult = await createReminderFromChat(cleanInput);
-          const reminderReplyText = buildReminderCreatedReply(reminderResult);
-
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
-
-          await loadReminders();
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Hatırlatma oluşturma hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
-      }
-
       if (shouldActivateSuggestedTaskFromChat(cleanInput)) {
         if (!suggestedTaskId) {
           const noSuggestedTaskReply: Message = {
@@ -2144,13 +1831,6 @@ Durum: ${outputResult.output.status}
             onClick={openOutputsView}
           >
             Çıktılar
-          </button>
-
-          <button
-            className={`nav-item ${activeView === "reminders" ? "active" : ""}`}
-            onClick={openRemindersView}
-          >
-            Hatırlatmalar
           </button>
         </nav>
       </aside>
