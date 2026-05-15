@@ -113,7 +113,26 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs";
+type PreferenceData = {
+  id: string;
+  project_id: string;
+  task_id: string;
+  category: string;
+  preference: string;
+  source: string;
+  confidence: string;
+  status: string;
+};
+
+type PreferenceFromChatResult = {
+  success: boolean;
+  message: string;
+  preference?: PreferenceData | null;
+  preferences?: PreferenceData[];
+  source_message?: string;
+};
+
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "preferences";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -159,6 +178,7 @@ type ActiveProjectDetail = {
   approvals: ApprovalData[];
   pending_approvals: ApprovalData[];
   outputs: OutputData[];
+  preferences: PreferenceData[];
   counts?: {
     tasks: number;
     open_tasks: number;
@@ -166,6 +186,7 @@ type ActiveProjectDetail = {
     approvals: number;
     pending_approvals: number;
     outputs?: number;
+    preferences?: number;
   };
   suggested_next_step: string;
 };
@@ -211,6 +232,9 @@ function App() {
 
   const [outputs, setOutputs] = useState<OutputData[]>([]);
   const [isOutputsLoading, setIsOutputsLoading] = useState(false);
+
+  const [preferences, setPreferences] = useState<PreferenceData[]>([]);
+  const [isPreferencesLoading, setIsPreferencesLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -267,51 +291,62 @@ function App() {
     setIsSending(value);
   }
 
-
   async function checkBackendHealth(options?: { force?: boolean }) {
-    if (isCheckingBackendRef.current && !options?.force) {
+    const shouldSkip =
+      !options?.force &&
+      (isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current);
+
+    if (shouldSkip) {
       return;
     }
 
-    isCheckingBackendRef.current = true;
-    if (backendStatus !== "online") {
-      setBackendStatus("checking");
-    }
-    setBackendMessage("Backend bağlantısı kontrol edildi.");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 2500);
 
     try {
-      let response = await fetch("http://127.0.0.1:8000/health", {
+      const response = await fetch("http://127.0.0.1:8000/", {
         method: "GET",
-        cache: "no-store",
+        signal: controller.signal,
       });
 
-      if (!response.ok) {
-        response = await fetch("http://127.0.0.1:8000/", {
-          method: "GET",
-          cache: "no-store",
-        });
-      }
+      window.clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Backend cevap verdi ama sağlıklı değil: ${response.status}`);
+        throw new Error("Backend cevap verdi ama sağlıklı değil.");
       }
+
+      const data = await response.json();
 
       setBackendStatus("online");
-      setBackendMessage("Backend bağlı ve çalışıyor.");
+      setBackendMessage(data?.message ?? "Vex backend bağlı.");
     } catch (error) {
-      console.error("Backend health check hatası:", error);
+      window.clearTimeout(timeoutId);
+
+      const stillBusy =
+        isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current;
+
+      if (stillBusy) {
+        return;
+      }
+
+      console.error(error);
       setBackendStatus("offline");
       setBackendMessage("Backend kapalı veya ulaşılamıyor.");
-    } finally {
-      isCheckingBackendRef.current = false;
     }
   }
-
 
   function getBackendLabel() {
     if (backendStatus === "online") return "Backend: Bağlı";
     if (backendStatus === "offline") return "Backend: Kapalı";
-    return "Backend: Bağlı";
+    return "Backend: Kontrol ediliyor";
   }
 
   function getActiveViewLabel() {
@@ -322,6 +357,7 @@ function App() {
     if (activeView === "tasks") return "Görev merkezi";
     if (activeView === "approvals") return "Onay Merkezi";
     if (activeView === "outputs") return "Çıktılar";
+    if (activeView === "preferences") return "Öğrenme Merkezi";
     return "Vex";
   }
 
@@ -423,21 +459,6 @@ function App() {
     );
   }
 
-  function shouldAnalyzeScreenFromChat(text: string) {
-    const lowerText = text.toLocaleLowerCase("tr-TR");
-
-    return (
-      lowerText.includes("ekran") ||
-      lowerText.includes("screen") ||
-      lowerText.includes("görüntü") ||
-      lowerText.includes("goruntu") ||
-      lowerText.includes("bu hatayı") ||
-      lowerText.includes("bu hatayi") ||
-      lowerText.includes("bu tasarımı") ||
-      lowerText.includes("bu tasarimi")
-    );
-  }
-
   function shouldCreateProjectFromChat(text: string) {
     const lowerText = text.toLocaleLowerCase("tr-TR");
 
@@ -471,6 +492,39 @@ function App() {
       lowerText.includes("not al");
 
     return hasTaskWord && hasCreateIntent;
+  }
+
+  function shouldLearnPreferenceFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    const directLearningCommands =
+      lowerText.includes("bunu öğren") ||
+      lowerText.includes("bunu ogren") ||
+      lowerText.includes("bunu aklında tut") ||
+      lowerText.includes("bunu aklinda tut") ||
+      lowerText.includes("bu tarzı koru") ||
+      lowerText.includes("bu tarzi koru") ||
+      lowerText.includes("bundan sonra böyle yaz") ||
+      lowerText.includes("bundan sonra boyle yaz") ||
+      lowerText.includes("böyle yaz") ||
+      lowerText.includes("boyle yaz") ||
+      lowerText.includes("bunu tercih olarak kaydet");
+
+    const feedbackSignals =
+      lowerText.includes("fazla uzun") ||
+      lowerText.includes("daha kısa") ||
+      lowerText.includes("daha kisa") ||
+      lowerText.includes("daha net") ||
+      lowerText.includes("daha premium") ||
+      lowerText.includes("daha sade") ||
+      lowerText.includes("çok süslü") ||
+      lowerText.includes("cok suslu") ||
+      lowerText.includes("bu iyi oldu") ||
+      lowerText.includes("bu tarz iyi") ||
+      lowerText.includes("böyle daha iyi") ||
+      lowerText.includes("boyle daha iyi");
+
+    return directLearningCommands || feedbackSignals;
   }
 
   function shouldSaveOutputFromChat(text: string) {
@@ -567,32 +621,6 @@ function App() {
     return response.json();
   }
 
-  async function analyzeScreenFromChat(text: string) {
-    const response = await fetch("http://127.0.0.1:8000/screen/capture-and-analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt: text,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Ekran analiz endpoint'i cevap vermedi.");
-    }
-
-    return response.json();
-  }
-
-  function buildScreenAnalysisReply(result: { success: boolean; analysis?: string; message?: string }) {
-    if (!result.success) {
-      return result.message || "Ekranı analiz edemedim Mert. macOS ekran kaydı iznini kontrol edelim.";
-    }
-
-    return `Ekran Analizi:\n\n${result.analysis || "Ekranı analiz ettim ama anlamlı bir çıktı oluşmadı."}`;
-  }
-
   async function createProjectFromChat(text: string): Promise<ProjectFromChatResult> {
     const response = await fetch("http://127.0.0.1:8000/projects/from-chat", {
       method: "POST",
@@ -628,6 +656,50 @@ function App() {
     }
 
     return response.json();
+  }
+
+  async function createPreferenceFromChat(text: string): Promise<PreferenceFromChatResult> {
+    const response = await fetch("http://127.0.0.1:8000/preferences/from-chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+        project_id: activeProjectId,
+        task_id: activeTaskId,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Sohbetten tercih öğrenme endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
+  function buildPreferenceLearnedReply(result: PreferenceFromChatResult) {
+    if (!result.success) {
+      return result.message || "Bu tercihi öğrenemedim Mert. Backend tarafını kontrol edelim.";
+    }
+
+    const preference = result.preference;
+
+    if (!preference) {
+      return "Tercih kaydı oluşturmaya çalıştım ama detay boş döndü Mert.";
+    }
+
+    return `Tamam Mert, bunu öğrendim.
+
+Tercih:
+${preference.preference}
+
+Proje: ${preference.project_id || "Genel"}
+Görev: ${preference.task_id || "Bağlı görev yok"}
+Kategori: ${preference.category}
+Güven: ${preference.confidence}
+
+Bundan sonraki benzer işlerde bunu dikkate alacağım.`;
   }
 
   async function createApprovalFromChat(text: string): Promise<ApprovalFromChatResult> {
@@ -727,164 +799,81 @@ ${approval.description || "Açıklama yok."}
 Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   }
 
+
   async function loadWorkspaceSummary() {
     setIsWorkspaceLoading(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/summary");
+      const response = await fetch("http://127.0.0.1:8000/workspace/summary", {
+        method: "GET",
+      });
 
       if (!response.ok) {
-        throw new Error("Workspace özeti yüklenemedi.");
+        throw new Error(`Workspace özeti yüklenemedi. Status: ${response.status}`);
       }
 
       const data = await response.json();
-      setWorkspaceSummary(data);
+
+      const safeData: WorkspaceSummary = {
+        success: Boolean(data?.success),
+        active_project: data?.active_project ?? null,
+        active_project_id: data?.active_project_id ?? "",
+        counts: {
+          active_projects: data?.counts?.active_projects ?? 0,
+          open_tasks: data?.counts?.open_tasks ?? 0,
+          high_priority_tasks: data?.counts?.high_priority_tasks ?? 0,
+          pending_approvals: data?.counts?.pending_approvals ?? 0,
+          outputs: data?.counts?.outputs ?? 0,
+          preferences: data?.counts?.preferences ?? 0,
+        },
+        active_projects: data?.active_projects ?? [],
+        open_tasks: data?.open_tasks ?? [],
+        high_priority_tasks: data?.high_priority_tasks ?? [],
+        pending_approvals: data?.pending_approvals ?? [],
+        outputs: data?.outputs ?? [],
+        suggested_next_step:
+          data?.suggested_next_step ??
+          "Bugün önce aktif proje, görevler ve onayları kontrol edelim.",
+      };
+
+      setWorkspaceSummary(safeData);
 
       if (data?.active_project) {
         setActiveProject(data.active_project);
         setActiveProjectId(data.active_project_id ?? data.active_project.id ?? "");
       }
+
+      if (data?.active_task) {
+        setActiveTask(data.active_task);
+        setActiveTaskId(data.active_task_id ?? data.active_task.id ?? "");
+      }
     } catch (error) {
-      console.error(error);
-      setWorkspaceSummary(null);
+      console.error("Dashboard yükleme hatası:", error);
+
+      setWorkspaceSummary({
+        success: false,
+        active_project: activeProject ?? null,
+        active_project_id: activeProjectId,
+        counts: {
+          active_projects: 0,
+          open_tasks: 0,
+          high_priority_tasks: 0,
+          pending_approvals: 0,
+          outputs: 0,
+          preferences: 0,
+        },
+        active_projects: [],
+        open_tasks: [],
+        high_priority_tasks: [],
+        pending_approvals: [],
+        outputs: [],
+        suggested_next_step: "Dashboard verisi alınamadı. Backend bağlantısını yenilemeyi deneyelim.",
+      });
     } finally {
       setIsWorkspaceLoading(false);
     }
   }
 
-  async function loadActiveProject() {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/active-project");
-
-      if (!response.ok) {
-        throw new Error("Aktif proje yüklenemedi.");
-      }
-
-      const data: ActiveProjectResponse = await response.json();
-
-      setActiveProject(data.project);
-      setActiveProjectId(data.project_id || "");
-    } catch (error) {
-      console.error(error);
-      setActiveProject(null);
-      setActiveProjectId("");
-    }
-  }
-
-  async function loadActiveTask() {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/active-task");
-
-      if (!response.ok) {
-        throw new Error("Aktif görev yüklenemedi.");
-      }
-
-      const data: ActiveTaskResponse = await response.json();
-
-      setActiveTask(data.task);
-      setActiveTaskId(data.task_id || "");
-    } catch (error) {
-      console.error(error);
-      setActiveTask(null);
-      setActiveTaskId("");
-    }
-  }
-
-  async function setTaskAsActive(taskId: string) {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/active-task", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          task_id: taskId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Aktif görev güncellenemedi.");
-      }
-
-      const data: ActiveTaskResponse = await response.json();
-
-      if (!data.success) {
-        alert(data.message ?? "Aktif görev güncellenemedi.");
-        return;
-      }
-
-      setActiveTask(data.task);
-      setActiveTaskId(data.task_id || "");
-
-      await loadTasks();
-      await loadWorkspaceSummary();
-      await checkBackendHealth({ force: true });
-    } catch (error) {
-      console.error(error);
-      alert("Aktif görev güncellenemedi. Backend çalışıyor mu kontrol edelim.");
-    }
-  }
-
-  async function loadActiveProjectDetail() {
-    setIsActiveProjectDetailLoading(true);
-
-    try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/active-project/detail");
-
-      if (!response.ok) {
-        throw new Error("Aktif proje detayı yüklenemedi.");
-      }
-
-      const data: ActiveProjectDetail = await response.json();
-      setActiveProjectDetail(data);
-
-      if (data.project) {
-        setActiveProject(data.project);
-        setActiveProjectId(data.project_id || data.project.id || "");
-      }
-    } catch (error) {
-      console.error(error);
-      setActiveProjectDetail(null);
-    } finally {
-      setIsActiveProjectDetailLoading(false);
-    }
-  }
-
-  async function setProjectAsActive(projectId: string) {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/workspace/active-project", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          project_id: projectId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Aktif proje güncellenemedi.");
-      }
-
-      const data: ActiveProjectResponse = await response.json();
-
-      if (!data.success) {
-        alert(data.message ?? "Aktif proje güncellenemedi.");
-        return;
-      }
-
-      setActiveProject(data.project);
-      setActiveProjectId(data.project_id || "");
-
-      await loadActiveProjectDetail();
-      await loadWorkspaceSummary();
-      await loadProjects();
-      await checkBackendHealth({ force: true });
-    } catch (error) {
-      console.error(error);
-      alert("Aktif proje güncellenemedi. Backend çalışıyor mu kontrol edelim.");
-    }
-  }
 
   async function loadMemory() {
     updateTranscribing(false);
@@ -984,6 +973,26 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       setOutputs([]);
     } finally {
       setIsOutputsLoading(false);
+    }
+  }
+
+  async function loadPreferences() {
+    setIsPreferencesLoading(true);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/preferences");
+
+      if (!response.ok) {
+        throw new Error("Tercihler yüklenemedi.");
+      }
+
+      const data = await response.json();
+      setPreferences(data);
+    } catch (error) {
+      console.error(error);
+      setPreferences([]);
+    } finally {
+      setIsPreferencesLoading(false);
     }
   }
 
@@ -1214,6 +1223,24 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
+  async function deletePreference(preferenceId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/preferences/${preferenceId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Tercih silinemedi.");
+      }
+
+      await loadPreferences();
+      await checkBackendHealth({ force: true });
+    } catch (error) {
+      console.error(error);
+      alert("Tercih silinemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
   async function startVoiceRecording() {
     if (isRecordingRef.current || isSendingRef.current || isTranscribingRef.current) {
       return;
@@ -1413,23 +1440,13 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     loadOutputs();
   }
 
+  function openPreferencesView() {
+    setActiveView("preferences");
+    loadPreferences();
+  }
+
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
-
-      if (shouldAnalyzeScreenFromChat(cleanInput)) {
-        const screenResult = await analyzeScreenFromChat(cleanInput);
-        const screenReplyText = buildScreenAnalysisReply(screenResult);
-
-        const screenReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: screenReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, screenReply]);
-        speakText(screenReplyText);
-        return;
-      }
 
     if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;
@@ -1459,6 +1476,25 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     updateSending(true);
 
     try {
+      if (shouldLearnPreferenceFromChat(cleanInput)) {
+        const preferenceResult = await createPreferenceFromChat(cleanInput);
+        const preferenceReplyText = buildPreferenceLearnedReply(preferenceResult);
+
+        const preferenceReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: preferenceReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, preferenceReply]);
+
+        await loadPreferences();
+        await loadWorkspaceSummary();
+        await loadActiveProjectDetail();
+        speakText(preferenceReplyText);
+        return;
+      }
+
       if (shouldActivateSuggestedTaskFromChat(cleanInput)) {
         if (!suggestedTaskId) {
           const noSuggestedTaskReply: Message = {
@@ -1754,6 +1790,13 @@ Durum: ${outputResult.output.status}
           >
             Çıktılar
           </button>
+
+          <button
+            className={`nav-item ${activeView === "preferences" ? "active" : ""}`}
+            onClick={openPreferencesView}
+          >
+            Öğrenme Merkezi
+          </button>
         </nav>
       </aside>
 
@@ -1777,7 +1820,7 @@ Durum: ${outputResult.output.status}
                   Yenile
                 </button>
 
-                <span className={`status-pill backend-${backendStatus === "checking" ? "online" : backendStatus}`}>
+                <span className={`status-pill backend-${backendStatus}`}>
                   {getBackendLabel()}
                 </span>
               </div>
@@ -1820,6 +1863,11 @@ Durum: ${outputResult.output.status}
                     <div className="memory-card">
                       <p className="panel-label">Kaydedilen çıktılar</p>
                       <h3>{workspaceSummary.counts.outputs ?? 0}</h3>
+                    </div>
+
+                    <div className="memory-card">
+                      <p className="panel-label">Öğrenilen tercihler</p>
+                      <h3>{workspaceSummary.counts.preferences ?? 0}</h3>
                     </div>
                   </div>
 
@@ -1961,6 +2009,32 @@ Durum: ${outputResult.output.status}
                               )}
                             </div>
                           </div>
+
+                          <div className="project-card">
+                            <div className="project-card-header">
+                              <div>
+                                <p className="panel-label">Aktif proje tercihleri</p>
+                                <h3>Vex’in öğrendikleri</h3>
+                              </div>
+                              <button className="small-action-button" onClick={openPreferencesView}>
+                                Öğrenme Merkezi
+                              </button>
+                            </div>
+
+                            <div className="project-section">
+                              {activeProjectDetail.preferences?.length > 0 ? (
+                                <ul>
+                                  {activeProjectDetail.preferences.slice(0, 5).map((preference) => (
+                                    <li key={preference.id}>
+                                      {preference.preference}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="panel-label">Bu proje için öğrenilmiş tercih yok.</p>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </>
                     ) : (
@@ -2068,7 +2142,7 @@ Durum: ${outputResult.output.status}
                   Sesi Durdur
                 </button>
 
-                <span className={`status-pill backend-${backendStatus === "checking" ? "online" : backendStatus}`}>
+                <span className={`status-pill backend-${backendStatus}`}>
                   {getBackendLabel()}
                 </span>
 
@@ -2650,6 +2724,76 @@ Durum: ${outputResult.output.status}
                   <strong>Henüz kayıtlı çıktı yok.</strong>
                   <p className="panel-label">
                     Vex bir metin ürettikten sonra “bunu kaydet” diyebilirsin.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+
+
+        {activeView === "preferences" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Tercih öğrenme sistemi</p>
+                <h2>Öğrenme Merkezi</h2>
+              </div>
+              <div className="topbar-actions">
+                <button className="small-action-button" onClick={loadPreferences}>
+                  Yenile
+                </button>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {isPreferencesLoading ? (
+                <div className="panel-card">
+                  <strong>Öğrenilen tercihler yükleniyor...</strong>
+                </div>
+              ) : preferences.length > 0 ? (
+                <div className="project-grid">
+                  {preferences.map((preference) => (
+                    <div className="project-card" key={preference.id}>
+                      <div className="project-card-header">
+                        <div>
+                          <p className="panel-label">
+                            {preference.project_id ? `Proje: ${preference.project_id}` : "Genel tercih"}
+                          </p>
+                          <h3>{preference.category}</h3>
+                        </div>
+
+                        <div className="project-card-actions">
+                          <span className="status-pill">{preference.confidence}</span>
+                          <span className="status-pill">{preference.status}</span>
+
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => deletePreference(preference.id)}
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="project-description">{preference.preference}</p>
+
+                      <div className="project-section">
+                        <p className="panel-label">Bağlantı</p>
+                        <ul>
+                          <li>Görev: {preference.task_id || "Bağlı görev yok"}</li>
+                          <li>Kaynak: {preference.source}</li>
+                        </ul>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="panel-card">
+                  <strong>Henüz öğrenilmiş tercih yok.</strong>
+                  <p className="panel-label">
+                    “Bundan sonra böyle yaz”, “bu tarzı koru”, “daha kısa olsun” gibi geri bildirimlerle Vex tercih öğrenebilir.
                   </p>
                 </div>
               )}

@@ -280,6 +280,21 @@ function App() {
     setBackendMessage("Backend bağlantısı kontrol edildi.");
 
     try {
+      if (shouldAnalyzeScreenFromChat(cleanInput)) {
+        const screenResult = await analyzeScreenFromChat(cleanInput);
+        const screenReplyText = buildScreenAnalysisReply(screenResult);
+
+        const screenReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: screenReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, screenReply]);
+        speakText(screenReplyText);
+        return;
+      }
+
       let response = await fetch("http://127.0.0.1:8000/health", {
         method: "GET",
         cache: "no-store",
@@ -1415,21 +1430,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
-
-      if (shouldAnalyzeScreenFromChat(cleanInput)) {
-        const screenResult = await analyzeScreenFromChat(cleanInput);
-        const screenReplyText = buildScreenAnalysisReply(screenResult);
-
-        const screenReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: screenReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, screenReply]);
-        speakText(screenReplyText);
-        return;
-      }
 
     if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;

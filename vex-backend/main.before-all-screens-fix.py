@@ -1115,9 +1115,7 @@ def capture_screen_to_file() -> dict:
     screenshot_path = SCREENSHOTS_PATH / "latest_screen.png"
 
     with mss.mss() as screenshot_tool:
-        # monitors[0] tüm ekranların birleşik görüntüsünü alır.
-        # monitors[1], monitors[2] gibi değerler tek tek ekranları temsil eder.
-        monitor = screenshot_tool.monitors[0]
+        monitor = screenshot_tool.monitors[1]
         image = screenshot_tool.grab(monitor)
 
         from mss.tools import to_png

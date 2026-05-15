@@ -427,14 +427,22 @@ function App() {
     const lowerText = text.toLocaleLowerCase("tr-TR");
 
     return (
-      lowerText.includes("ekran") ||
-      lowerText.includes("screen") ||
-      lowerText.includes("görüntü") ||
-      lowerText.includes("goruntu") ||
-      lowerText.includes("bu hatayı") ||
-      lowerText.includes("bu hatayi") ||
-      lowerText.includes("bu tasarımı") ||
-      lowerText.includes("bu tasarimi")
+      lowerText.includes("ekranı oku") ||
+      lowerText.includes("ekrani oku") ||
+      lowerText.includes("ekranımı oku") ||
+      lowerText.includes("ekranimi oku") ||
+      lowerText.includes("benim ekranımı oku") ||
+      lowerText.includes("benim ekranimi oku") ||
+      lowerText.includes("gerçek ekranı oku") ||
+      lowerText.includes("gercek ekrani oku") ||
+      lowerText.includes("ekranda ne var") ||
+      lowerText.includes("bu ekranda ne var") ||
+      lowerText.includes("bu hatayı analiz et") ||
+      lowerText.includes("bu hatayi analiz et") ||
+      lowerText.includes("ekranı analiz et") ||
+      lowerText.includes("ekrani analiz et") ||
+      lowerText.includes("bu tasarımı yorumla") ||
+      lowerText.includes("bu tasarimi yorumla")
     );
   }
 
@@ -590,7 +598,7 @@ function App() {
       return result.message || "Ekranı analiz edemedim Mert. macOS ekran kaydı iznini kontrol edelim.";
     }
 
-    return `Ekran Analizi:\n\n${result.analysis || "Ekranı analiz ettim ama anlamlı bir çıktı oluşmadı."}`;
+    return result.analysis || "Ekranı analiz ettim ama anlamlı bir çıktı oluşmadı.";
   }
 
   async function createProjectFromChat(text: string): Promise<ProjectFromChatResult> {
@@ -1415,21 +1423,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
-
-      if (shouldAnalyzeScreenFromChat(cleanInput)) {
-        const screenResult = await analyzeScreenFromChat(cleanInput);
-        const screenReplyText = buildScreenAnalysisReply(screenResult);
-
-        const screenReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: screenReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, screenReply]);
-        speakText(screenReplyText);
-        return;
-      }
 
     if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;

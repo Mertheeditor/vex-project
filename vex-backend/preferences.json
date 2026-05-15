@@ -1,0 +1,12 @@
+[
+  {
+    "id": "bilsanpack-hero-metinlerinde-uzun-ve-suslu-cumlelerden-kacinilmali-kisa-net-ve",
+    "project_id": "bilsanpack",
+    "task_id": "bilsanpack-hero-metni-hazirlama",
+    "category": "marka_dili",
+    "preference": "Bilsanpack hero metinlerinde uzun ve süslü cümlelerden kaçınılmalı; kısa, net ve güven veren bir dil kullanılmalı.",
+    "source": "chat",
+    "confidence": "high",
+    "status": "active"
+  }
+]

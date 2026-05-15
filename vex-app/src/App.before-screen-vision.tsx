@@ -267,51 +267,62 @@ function App() {
     setIsSending(value);
   }
 
-
   async function checkBackendHealth(options?: { force?: boolean }) {
-    if (isCheckingBackendRef.current && !options?.force) {
+    const shouldSkip =
+      !options?.force &&
+      (isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current);
+
+    if (shouldSkip) {
       return;
     }
 
-    isCheckingBackendRef.current = true;
-    if (backendStatus !== "online") {
-      setBackendStatus("checking");
-    }
-    setBackendMessage("Backend bağlantısı kontrol edildi.");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 2500);
 
     try {
-      let response = await fetch("http://127.0.0.1:8000/health", {
+      const response = await fetch("http://127.0.0.1:8000/", {
         method: "GET",
-        cache: "no-store",
+        signal: controller.signal,
       });
 
-      if (!response.ok) {
-        response = await fetch("http://127.0.0.1:8000/", {
-          method: "GET",
-          cache: "no-store",
-        });
-      }
+      window.clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Backend cevap verdi ama sağlıklı değil: ${response.status}`);
+        throw new Error("Backend cevap verdi ama sağlıklı değil.");
       }
+
+      const data = await response.json();
 
       setBackendStatus("online");
-      setBackendMessage("Backend bağlı ve çalışıyor.");
+      setBackendMessage(data?.message ?? "Vex backend bağlı.");
     } catch (error) {
-      console.error("Backend health check hatası:", error);
+      window.clearTimeout(timeoutId);
+
+      const stillBusy =
+        isBusyRef.current ||
+        isRecordingRef.current ||
+        isTranscribingRef.current ||
+        isSendingRef.current;
+
+      if (stillBusy) {
+        return;
+      }
+
+      console.error(error);
       setBackendStatus("offline");
       setBackendMessage("Backend kapalı veya ulaşılamıyor.");
-    } finally {
-      isCheckingBackendRef.current = false;
     }
   }
-
 
   function getBackendLabel() {
     if (backendStatus === "online") return "Backend: Bağlı";
     if (backendStatus === "offline") return "Backend: Kapalı";
-    return "Backend: Bağlı";
+    return "Backend: Kontrol ediliyor";
   }
 
   function getActiveViewLabel() {
@@ -420,21 +431,6 @@ function App() {
       lowerText.includes("hafızaya yaz") ||
       lowerText.includes("bunu unutma") ||
       lowerText.includes("unutma")
-    );
-  }
-
-  function shouldAnalyzeScreenFromChat(text: string) {
-    const lowerText = text.toLocaleLowerCase("tr-TR");
-
-    return (
-      lowerText.includes("ekran") ||
-      lowerText.includes("screen") ||
-      lowerText.includes("görüntü") ||
-      lowerText.includes("goruntu") ||
-      lowerText.includes("bu hatayı") ||
-      lowerText.includes("bu hatayi") ||
-      lowerText.includes("bu tasarımı") ||
-      lowerText.includes("bu tasarimi")
     );
   }
 
@@ -565,32 +561,6 @@ function App() {
     }
 
     return response.json();
-  }
-
-  async function analyzeScreenFromChat(text: string) {
-    const response = await fetch("http://127.0.0.1:8000/screen/capture-and-analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt: text,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Ekran analiz endpoint'i cevap vermedi.");
-    }
-
-    return response.json();
-  }
-
-  function buildScreenAnalysisReply(result: { success: boolean; analysis?: string; message?: string }) {
-    if (!result.success) {
-      return result.message || "Ekranı analiz edemedim Mert. macOS ekran kaydı iznini kontrol edelim.";
-    }
-
-    return `Ekran Analizi:\n\n${result.analysis || "Ekranı analiz ettim ama anlamlı bir çıktı oluşmadı."}`;
   }
 
   async function createProjectFromChat(text: string): Promise<ProjectFromChatResult> {
@@ -1416,21 +1386,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
-      if (shouldAnalyzeScreenFromChat(cleanInput)) {
-        const screenResult = await analyzeScreenFromChat(cleanInput);
-        const screenReplyText = buildScreenAnalysisReply(screenResult);
-
-        const screenReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: screenReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, screenReply]);
-        speakText(screenReplyText);
-        return;
-      }
-
     if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;
     }
@@ -1777,7 +1732,7 @@ Durum: ${outputResult.output.status}
                   Yenile
                 </button>
 
-                <span className={`status-pill backend-${backendStatus === "checking" ? "online" : backendStatus}`}>
+                <span className={`status-pill backend-${backendStatus}`}>
                   {getBackendLabel()}
                 </span>
               </div>
@@ -2068,7 +2023,7 @@ Durum: ${outputResult.output.status}
                   Sesi Durdur
                 </button>
 
-                <span className={`status-pill backend-${backendStatus === "checking" ? "online" : backendStatus}`}>
+                <span className={`status-pill backend-${backendStatus}`}>
                   {getBackendLabel()}
                 </span>
 
