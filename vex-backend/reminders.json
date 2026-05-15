@@ -46,5 +46,29 @@
     "notes": [
       "Sohbetten oluşturuldu"
     ]
+  },
+  {
+    "id": "yemege-bak",
+    "title": "Yemeğe bak",
+    "remind_at": "2026-05-15T18:27",
+    "project_id": "bilsanpack",
+    "task_id": "bilsanpack-hero-metni-hazirlama",
+    "status": "notified",
+    "notified": true,
+    "notes": [
+      "Sohbetten oluşturuldu"
+    ]
+  },
+  {
+    "id": "disari-cikilacak",
+    "title": "Dışarı çıkılacak",
+    "remind_at": "2026-05-15T18:29",
+    "project_id": "bilsanpack",
+    "task_id": "bilsanpack-hero-metni-hazirlama",
+    "status": "notified",
+    "notified": true,
+    "notes": [
+      "Sohbetten oluşturuldu"
+    ]
   }
 ]

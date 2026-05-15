@@ -79,10 +79,6 @@ class ScreenAnalyzeRequest(BaseModel):
     prompt: str = "Ekranda ne olduğunu analiz et."
 
 
-class ComputerPlanRequest(BaseModel):
-    instruction: str
-
-
 class UrlAnalyzeRequest(BaseModel):
     url: str
     prompt: str = "Siteyi SEO, tasarım, içerik ve güven algısı açısından analiz et."
@@ -1658,66 +1654,6 @@ def get_due_reminders(mark_as_notified: bool = True) -> dict:
     }
 
 
-
-def plan_computer_action_from_screen(instruction: str) -> dict:
-    capture_result = capture_screen_to_file()
-
-    if not capture_result.get("success"):
-        return capture_result
-
-    client = get_gemini_client()
-
-    if client is None:
-        return {
-            "success": False,
-            "message": "Gemini API key bulunamadı. Bilgisayar kontrol planı için GEMINI_API_KEY gerekiyor.",
-        }
-
-    image_bytes = Path(capture_result["path"]).read_bytes()
-
-    prompt = f"""
-Sen Vex'in bilgisayar kontrol hazırlık modülüsün.
-
-Sana Mert'in gerçek ekran görüntüsü veriliyor.
-Henüz hiçbir şeye tıklama, yazma veya işlem yapma.
-Sadece yapılacak işi analiz et ve güvenli bir plan çıkar.
-
-Mert'in isteği:
-{instruction}
-
-Kurallar:
-- Türkçe cevap ver.
-- Sadece ekranda gördüğün şeylere dayan.
-- Görmediğin butonu veya alanı varmış gibi söyleme.
-- Eğer işlem riskliyse açıkça riskli de.
-- Dosya silme, ödeme, canlıya alma, mail gönderme, ürün yayınlama gibi işlemler yüksek risklidir.
-- Tıklama veya yazma yapmadan önce Mert’ten onay istenmesi gerektiğini belirt.
-- Cevapta şu başlıkları kullan:
-  1. Ekranda gördüğüm
-  2. Yapılacak işlem
-  3. Risk seviyesi
-  4. Onay gerekiyor mu?
-  5. Önerilen güvenli sonraki adım
-"""
-
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=[
-            prompt,
-            types.Part.from_bytes(
-                data=image_bytes,
-                mime_type="image/png",
-            ),
-        ],
-    )
-
-    return {
-        "success": True,
-        "plan": response.text or "Plan oluşturuldu ama metin boş döndü.",
-        "screenshot": capture_result,
-    }
-
-
 def build_memory_text(memory: dict) -> str:
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
@@ -2212,21 +2148,6 @@ def analyze_site(request: UrlAnalyzeRequest):
             "success": False,
             "message": str(error),
             "analysis": "",
-        }
-
-
-
-@app.post("/computer/plan")
-def computer_plan(request: ComputerPlanRequest):
-    try:
-        return plan_computer_action_from_screen(request.instruction)
-    except Exception as error:
-        print("Vex bilgisayar kontrol plan hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
         }
 
 

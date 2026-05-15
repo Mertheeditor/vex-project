@@ -544,6 +544,26 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     return match[0].replace(/[),.;]+$/, "");
   }
 
+  function shouldPlanComputerActionFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    return (
+      lowerText.includes("bilgisayarımı kullan") ||
+      lowerText.includes("bilgisayarimi kullan") ||
+      lowerText.includes("ekrandaki butona bas") ||
+      lowerText.includes("şuna tıkla") ||
+      lowerText.includes("suna tikla") ||
+      lowerText.includes("buna tıkla") ||
+      lowerText.includes("buna tikla") ||
+      lowerText.includes("ekranda ne yapmalıyım") ||
+      lowerText.includes("ekranda ne yapmaliyim") ||
+      lowerText.includes("bunu nasıl yaparım") ||
+      lowerText.includes("bunu nasil yaparim") ||
+      lowerText.includes("işlem planı çıkar") ||
+      lowerText.includes("islem plani cikar")
+    );
+  }
+
   function shouldAnalyzeSiteFromChat(text: string) {
     const lowerText = text.toLocaleLowerCase("tr-TR");
     const url = extractFirstUrl(text);
@@ -560,19 +580,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
       lowerText.includes("tasarımını analiz et") ||
       lowerText.includes("tasarimini analiz et") ||
       lowerText.includes("site analizi")
-    );
-  }
-
-  function shouldCreateReminderFromChat(text: string) {
-    const lowerText = text.toLocaleLowerCase("tr-TR");
-
-    return (
-      lowerText.includes("hatırlat") ||
-      lowerText.includes("hatirlat") ||
-      lowerText.includes("beni uyar") ||
-      lowerText.includes("alarm kur") ||
-      lowerText.includes("dakika sonra") ||
-      lowerText.includes("saat sonra")
     );
   }
 
@@ -720,6 +727,32 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     return response.json();
   }
 
+  async function planComputerActionFromChat(text: string) {
+    const response = await fetch("http://127.0.0.1:8000/computer/plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        instruction: text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Bilgisayar kontrol plan endpoint'i cevap vermedi.");
+    }
+
+    return response.json();
+  }
+
+  function buildComputerPlanReply(result: { success: boolean; plan?: string; message?: string }) {
+    if (!result.success) {
+      return result.message || "Bilgisayar kontrol planı çıkaramadım Mert.";
+    }
+
+    return `Bilgisayar Kontrol Planı:\n\n${result.plan || "Plan oluşturuldu ama metin boş döndü."}`;
+  }
+
   async function analyzeSiteFromChat(text: string) {
     const url = extractFirstUrl(text);
 
@@ -810,48 +843,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     }
 
     return response.json();
-  }
-
-  async function createReminderFromChat(text: string) {
-    const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: text,
-        project_id: activeProjectId,
-        task_id: activeTaskId,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Hatırlatma endpoint hatası: HTTP ${response.status}: ${errorText}`);
-    }
-
-    return response.json();
-  }
-
-  function buildReminderCreatedReply(result: any) {
-    if (!result.success) {
-      return result.message || "Hatırlatmayı oluşturamadım Mert.";
-    }
-
-    const reminder = result.reminder;
-
-    if (!reminder) {
-      return "Hatırlatmayı oluşturdum ama detay boş döndü Mert.";
-    }
-
-    return `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`;
   }
 
   async function createApprovalFromChat(text: string): Promise<ApprovalFromChatResult> {
@@ -1259,10 +1250,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         .map((reminder) => `• ${reminder.title}`)
         .join("\n");
 
-      const alertText =
-        dueReminders.length === 1
-          ? `Mert, şunu hatırlatmamı istemiştin: ${dueReminders[0].title}`
-          : `Mert, hatırlatmamı istediğin birkaç şeyin zamanı geldi:\n\n${reminderText}`;
+      const alertText = `Mert, zamanı gelen hatırlatmaların var:\n\n${reminderText}`;
 
       const reminderMessage: Message = {
         id: Date.now() + 3,
@@ -1735,6 +1723,105 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
+    if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
+      return;
+    }
+
+    stopSpeaking();
+    setBusyState(true);
+
+    const userMessage: Message = {
+      id: Date.now(),
+      sender: "Sen",
+      text: cleanInput,
+    };
+
+    const historyForBackend = messages.map((message) => ({
+      sender: message.sender,
+      text: message.text,
+    }));
+
+    setMessages((currentMessages) => [...currentMessages, userMessage]);
+    setInput("");
+    updateSending(true);
+
+    try {
+      const hardReminderText = cleanInput.toLocaleLowerCase("tr-TR");
+      const isHardReminderCommand =
+        hardReminderText.includes("hatırlat") ||
+        hardReminderText.includes("hatirlat") ||
+        hardReminderText.includes("beni uyar") ||
+        hardReminderText.includes("alarm kur") ||
+        hardReminderText.includes("dakika sonra") ||
+        hardReminderText.includes("saat sonra");
+
+      if (isHardReminderCommand) {
+        const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message: cleanInput,
+            project_id: activeProjectId,
+            task_id: activeTaskId,
+          }),
+        });
+
+        const rawText = await response.text();
+
+        if (!response.ok) {
+          throw new Error(`Hatırlatma endpoint hatası: HTTP ${response.status}: ${rawText}`);
+        }
+
+        const reminderResult = JSON.parse(rawText);
+        const reminder = reminderResult.reminder;
+
+        const reminderReplyText =
+          reminderResult.success && reminder
+            ? `Tamam Mert, hatırlatmayı kurdum.
+
+Başlık: ${reminder.title}
+Zaman: ${reminder.remind_at}
+Proje: ${reminder.project_id || "Genel"}
+Görev: ${reminder.task_id || "Bağlı görev yok"}
+
+Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
+            : reminderResult.message || "Hatırlatmayı oluşturamadım Mert.";
+
+        const reminderReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: reminderReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, reminderReply]);
+
+        try {
+          await loadReminders();
+        } catch (loadError) {
+          console.error("Hatırlatma listesi yenilenemedi:", loadError);
+        }
+
+        speakText(reminderReplyText);
+        return;
+      }
+
+      if (shouldPlanComputerActionFromChat(cleanInput)) {
+        const computerPlanResult = await planComputerActionFromChat(cleanInput);
+        const computerPlanReplyText = buildComputerPlanReply(computerPlanResult);
+
+        const computerPlanReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: computerPlanReplyText,
+        };
+
+        setMessages((currentMessages) => [...currentMessages, computerPlanReply]);
+        speakText(computerPlanReplyText);
+        return;
+      }
+
       if (shouldAnalyzeSiteFromChat(cleanInput)) {
         const siteResult = await analyzeSiteFromChat(cleanInput);
         const siteReplyText = buildSiteAnalysisReply(siteResult);
@@ -1765,147 +1852,21 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         return;
       }
 
-    if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
-      return;
-    }
-
-    if (backendStatus === "offline") {
-      alert("Backend kapalı görünüyor. Mesaj göndermek için backend’i başlatmamız gerekiyor.");
-      return;
-    }
-
-    stopSpeaking();
-    setBusyState(true);
-
-    const userMessage: Message = {
-      id: Date.now(),
-      sender: "Sen",
-      text: cleanInput,
-    };
-
-    const historyForBackend = messages.map((message) => ({
-      sender: message.sender,
-      text: message.text,
-    }));
-
-    setMessages((currentMessages) => [...currentMessages, userMessage]);
-    setInput("");
-    updateSending(true);
-
-    try {
-      // VEX_HARD_REMINDER_ROUTE_START
-      const hardReminderText = cleanInput.toLocaleLowerCase("tr-TR");
-      const isHardReminderCommand =
-        hardReminderText.includes("hatırlat") ||
-        hardReminderText.includes("hatirlat") ||
-        hardReminderText.includes("beni uyar") ||
-        hardReminderText.includes("alarm kur") ||
-        hardReminderText.includes("dakika sonra") ||
-        hardReminderText.includes("saat sonra");
-
-      if (isHardReminderCommand) {
-        try {
-          const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              message: cleanInput,
-              project_id: activeProjectId,
-              task_id: activeTaskId,
-            }),
-          });
-
-          const rawText = await response.text();
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${rawText}`);
-          }
-
-          const reminderResult = JSON.parse(rawText);
-          const reminder = reminderResult.reminder;
-
-          const reminderReplyText =
-            reminderResult.success && reminder
-              ? `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
-              : reminderResult.message || "Hatırlatmayı oluşturamadım Mert.";
-
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
-
-          try {
-            await loadReminders();
-          } catch (loadError) {
-            console.error("Hatırlatma listesi yenilenemedi:", loadError);
-          }
-
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Hatırlatma route hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
-      }
-      // VEX_HARD_REMINDER_ROUTE_END
       if (shouldCreateReminderFromChat(cleanInput)) {
-        try {
-          const reminderResult = await createReminderFromChat(cleanInput);
-          const reminderReplyText = buildReminderCreatedReply(reminderResult);
+        const reminderResult = await createReminderFromChat(cleanInput);
+        const reminderReplyText = buildReminderCreatedReply(reminderResult);
 
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
+        const reminderReply: Message = {
+          id: Date.now() + 2,
+          sender: "Vex",
+          text: reminderReplyText,
+        };
 
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
+        setMessages((currentMessages) => [...currentMessages, reminderReply]);
 
-          await loadReminders();
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Hatırlatma oluşturma hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
+        await loadReminders();
+        speakText(reminderReplyText);
+        return;
       }
 
       if (shouldActivateSuggestedTaskFromChat(cleanInput)) {
@@ -1996,7 +1957,9 @@ Durum: ${outputResult.output.status}
 
 Çıktılar panelinden görebilirsin.${
   activeTaskId
-    ? "\n\nBu çıktı aktif görevi karşılıyorsa bana “evet kapat” diyebilirsin; görevi tamamlandı yaparım."
+    ? "
+
+Bu çıktı aktif görevi karşılıyorsa bana “evet kapat” diyebilirsin; görevi tamamlandı yaparım."
     : ""
 }`
           : outputResult.message || "Çıktıyı kaydedemedim Mert.";
@@ -2102,11 +2065,13 @@ Durum: ${outputResult.output.status}
         }),
       });
 
+      const rawChatText = await response.text();
+
       if (!response.ok) {
-        throw new Error("Backend cevap vermedi.");
+        throw new Error(`Chat endpoint hatası: HTTP ${response.status}: ${rawChatText}`);
       }
 
-      const data = await response.json();
+      const data = JSON.parse(rawChatText);
 
       const vexReply: Message = {
         id: Date.now() + 2,
@@ -2124,6 +2089,8 @@ Durum: ${outputResult.output.status}
 
       speakText(vexReply.text);
     } catch (error) {
+      console.error("sendMessage hata detayı:", error);
+
       const errorReply: Message = {
         id: Date.now() + 3,
         sender: "Vex",
@@ -2133,13 +2100,14 @@ Durum: ${outputResult.output.status}
       };
 
       setMessages((currentMessages) => [...currentMessages, errorReply]);
-      console.error(error);
+      speakText(errorReply.text);
     } finally {
       updateSending(false);
       setBusyState(false);
       await checkBackendHealth({ force: true });
     }
   }
+
 
   return (
     <main className="app-shell">

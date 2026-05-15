@@ -249,14 +249,6 @@ function App() {
   useEffect(() => {
     checkBackendHealth({ force: true });
 
-    // VEX_REMINDER_INTERVAL_START
-    checkDueReminders();
-
-    const vexReminderInterval = window.setInterval(() => {
-      checkDueReminders();
-    }, 15000);
-    // VEX_REMINDER_INTERVAL_END
-
     const reminderInterval = window.setInterval(() => {
       checkDueReminders();
     }, 30000);
@@ -274,9 +266,6 @@ function App() {
     };
     return () => {
       window.clearInterval(reminderInterval);
-    };
-    return () => {
-      window.clearInterval(vexReminderInterval);
     };
   }, []);
 
@@ -1228,59 +1217,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       setReminders([]);
     } finally {
       setIsRemindersLoading(false);
-    }
-  }
-
-
-  async function checkDueReminders() {
-    try {
-      const response = await fetch("http://127.0.0.1:8000/reminders/due", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          mark_as_notified: true,
-        }),
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      const data = await response.json();
-      const dueReminders: ReminderData[] = data?.due_reminders ?? [];
-
-      if (dueReminders.length === 0) {
-        return;
-      }
-
-      const reminderText = dueReminders
-        .map((reminder) => `• ${reminder.title}`)
-        .join("\n");
-
-      const alertText =
-        dueReminders.length === 1
-          ? `Mert, şunu hatırlatmamı istemiştin: ${dueReminders[0].title}`
-          : `Mert, hatırlatmamı istediğin birkaç şeyin zamanı geldi:\n\n${reminderText}`;
-
-      const reminderMessage: Message = {
-        id: Date.now() + 3,
-        sender: "Vex",
-        text: alertText,
-      };
-
-      setMessages((currentMessages) => [...currentMessages, reminderMessage]);
-
-      try {
-        await loadReminders();
-      } catch (loadError) {
-        console.error("Hatırlatmalar yenilenemedi:", loadError);
-      }
-
-      speakText(alertText);
-    } catch (error) {
-      console.error("Hatırlatma zamanı kontrol hatası:", error);
     }
   }
 

@@ -563,19 +563,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     );
   }
 
-  function shouldCreateReminderFromChat(text: string) {
-    const lowerText = text.toLocaleLowerCase("tr-TR");
-
-    return (
-      lowerText.includes("hatırlat") ||
-      lowerText.includes("hatirlat") ||
-      lowerText.includes("beni uyar") ||
-      lowerText.includes("alarm kur") ||
-      lowerText.includes("dakika sonra") ||
-      lowerText.includes("saat sonra")
-    );
-  }
-
   function shouldAnalyzeScreenFromChat(text: string) {
     const lowerText = text.toLocaleLowerCase("tr-TR");
 
@@ -810,48 +797,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     }
 
     return response.json();
-  }
-
-  async function createReminderFromChat(text: string) {
-    const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: text,
-        project_id: activeProjectId,
-        task_id: activeTaskId,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Hatırlatma endpoint hatası: HTTP ${response.status}: ${errorText}`);
-    }
-
-    return response.json();
-  }
-
-  function buildReminderCreatedReply(result: any) {
-    if (!result.success) {
-      return result.message || "Hatırlatmayı oluşturamadım Mert.";
-    }
-
-    const reminder = result.reminder;
-
-    if (!reminder) {
-      return "Hatırlatmayı oluşturdum ama detay boş döndü Mert.";
-    }
-
-    return `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`;
   }
 
   async function createApprovalFromChat(text: string): Promise<ApprovalFromChatResult> {
@@ -1259,10 +1204,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         .map((reminder) => `• ${reminder.title}`)
         .join("\n");
 
-      const alertText =
-        dueReminders.length === 1
-          ? `Mert, şunu hatırlatmamı istemiştin: ${dueReminders[0].title}`
-          : `Mert, hatırlatmamı istediğin birkaç şeyin zamanı geldi:\n\n${reminderText}`;
+      const alertText = `Mert, zamanı gelen hatırlatmaların var:\n\n${reminderText}`;
 
       const reminderMessage: Message = {
         id: Date.now() + 3,
@@ -2127,9 +2069,7 @@ Durum: ${outputResult.output.status}
       const errorReply: Message = {
         id: Date.now() + 3,
         sender: "Vex",
-        text: `Mesaj gönderirken teknik hata aldım Mert: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        text: "Backend bağlantısında sorun oldu. Python backend'in çalıştığından emin olalım.",
       };
 
       setMessages((currentMessages) => [...currentMessages, errorReply]);
