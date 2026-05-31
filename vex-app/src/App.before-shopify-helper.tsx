@@ -544,28 +544,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     return match[0].replace(/[),.;]+$/, "");
   }
 
-  function shouldCreateShopifyContentFromChat(text: string) {
-    const lowerText = text.toLocaleLowerCase("tr-TR");
-
-    return (
-      lowerText.includes("shopify") &&
-      (
-        lowerText.includes("ürün") ||
-        lowerText.includes("urun") ||
-        lowerText.includes("başlık") ||
-        lowerText.includes("baslik") ||
-        lowerText.includes("açıklama") ||
-        lowerText.includes("aciklama") ||
-        lowerText.includes("seo") ||
-        lowerText.includes("meta") ||
-        lowerText.includes("içerik") ||
-        lowerText.includes("icerik") ||
-        lowerText.includes("hazırla") ||
-        lowerText.includes("hazirla")
-      )
-    );
-  }
-
   function shouldAnalyzeSiteFromChat(text: string) {
     const lowerText = text.toLocaleLowerCase("tr-TR");
     const url = extractFirstUrl(text);
@@ -740,40 +718,6 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     }
 
     return response.json();
-  }
-
-  async function createShopifyContentFromChat(text: string) {
-    const response = await fetch("http://127.0.0.1:8000/shopify/content-from-chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: text,
-        project_id: activeProjectId,
-        task_id: activeTaskId,
-        language: "English",
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Shopify içerik endpoint hatası: HTTP ${response.status}: ${errorText}`);
-    }
-
-    return response.json();
-  }
-
-  function buildShopifyContentReply(result: any) {
-    if (!result.success) {
-      return result.message || "Shopify içeriğini hazırlayamadım Mert.";
-    }
-
-    if (result.formatted_output) {
-      return result.formatted_output;
-    }
-
-    return "Shopify içerik paketi hazırlandı ama formatlı çıktı boş döndü.";
   }
 
   async function analyzeSiteFromChat(text: string) {
@@ -1790,21 +1734,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
-
-      if (shouldCreateShopifyContentFromChat(cleanInput)) {
-        const shopifyResult = await createShopifyContentFromChat(cleanInput);
-        const shopifyReplyText = buildShopifyContentReply(shopifyResult);
-
-        const shopifyReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: shopifyReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, shopifyReply]);
-        speakText(shopifyReplyText);
-        return;
-      }
 
       if (shouldAnalyzeSiteFromChat(cleanInput)) {
         const siteResult = await analyzeSiteFromChat(cleanInput);
