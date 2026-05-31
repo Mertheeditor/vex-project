@@ -2121,74 +2121,6 @@ def extract_product_page_summary(url: str) -> dict:
         if image.get("alt", "").strip()
     ]
 
-    # Fiyat çıkarma
-    price = ""
-    
-    # 1. Meta property (Open Graph / Shopify / Yoast) - EN GÜVENİLİR YÖNTEM!
-    if not price:
-        price_meta = (
-            soup.find("meta", property="product:price:amount") or
-            soup.find("meta", attrs={"name": "product:price:amount"}) or
-            soup.find("meta", itemprop="price")
-        )
-        if price_meta and price_meta.get("content", "").strip():
-            price = price_meta.get("content", "").strip()
-
-    # 2. JSON-LD schema.org/Product içinde price (Yalnızca "Product" tipindeki şemadan al)
-    if not price:
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                ld = json.loads(script.get_text(strip=True))
-                
-                # Bazen liste olabilir
-                ld_list = ld if isinstance(ld, list) else [ld]
-                
-                # Bazen "@graph" içinde olabilir (Yoast SEO)
-                if isinstance(ld, dict) and "@graph" in ld:
-                    ld_list = ld["@graph"]
-
-                for item in ld_list:
-                    if isinstance(item, dict) and item.get("@type") == "Product":
-                        offers = item.get("offers", {})
-                        if isinstance(offers, dict) and offers.get("price"):
-                            price = str(offers.get("price"))
-                            break
-                        if isinstance(offers, list) and len(offers) > 0:
-                            price = str(offers[0].get("price", ""))
-                            break
-            except (json.JSONDecodeError, AttributeError, TypeError):
-                pass
-            
-            if price:
-                break
-
-    # 3. HTML attribute "data-price" (sepete ekle butonlarında falan kesin fiyat bulunur)
-    if not price:
-        button_with_price = soup.find(attrs={"data-price": True})
-        if button_with_price and button_with_price.get("data-price", "").strip():
-            price = button_with_price.get("data-price").strip()
-
-    # 4. Regex fallback
-    if not price:
-        price_match = re.search(
-            r'(?:[$€£])\s*(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s*(?:[$€£€]|EUR|USD)',
-            body_text[:500],
-            re.IGNORECASE,
-        )
-        if price_match:
-            price = price_match.group(0).strip()
-
-    # Para birimini de çıkar
-    currency = ""
-    currency_meta = soup.find("meta", property="product:price:currency")
-    if currency_meta and currency_meta.get("content", "").strip():
-        currency = currency_meta.get("content", "").strip()
-
-    if not currency and price:
-        currency_match = re.match(r'([$€£€]|EUR|USD|TRY)', price)
-        if currency_match:
-            currency = currency_match.group(1)
-
     return {
         "success": True,
         "url": result.get("final_url", url),
@@ -2196,8 +2128,6 @@ def extract_product_page_summary(url: str) -> dict:
         "meta_description": meta_description,
         "h1": h1,
         "h2": h2,
-        "price": price,
-        "currency": currency,
         "body_excerpt": body_excerpt,
         "image_alt_texts": alt_texts[:10],
         "word_count": len(body_text.split()),
@@ -2369,209 +2299,189 @@ def build_product_finder_reply(result: dict) -> str:
     best = analysis.get("best_match") or {}
     matches = analysis.get("matches") or []
     questions = analysis.get("questions_for_mert") or []
-    pages_scanned = result.get("pages_scanned", 0)
-
-    summary = analysis.get("summary", "").strip()
 
     lines = []
-
-    lines.append("🔍 Ürün aramasını tamamladım Mert.")
-    lines.append(f"Toplam {pages_scanned} sayfayı taradım ve sonuçları derledim.")
+    lines.append("Site Ürün Araması")
+    lines.append("")
+    lines.append(f"Taranan sayfa: {result.get('pages_scanned', 0)}")
+    lines.append("")
+    lines.append(analysis.get("summary", "Kısa sonuç üretilemedi."))
     lines.append("")
 
-    if summary:
-        lines.append("📌 Kısa Sonuç")
-        lines.append(summary)
+    if best:
+        lines.append("En iyi eşleşme:")
+        lines.append(f"Başlık: {best.get('original_title', '-')}")
+        lines.append(f"URL: {best.get('url', '-')}")
+        lines.append(f"Güven: {best.get('confidence', '-')}")
+        lines.append(f"Türkçe açıklama: {best.get('turkish_explanation', '-')}")
+        lines.append(f"Neden eşleşti: {best.get('why_match', '-')}")
         lines.append("")
 
-    if best and best.get("url"):
-        lines.append("⭐ En İyi Eşleşme")
-        lines.append(f"Ürün: {best.get('original_title', '-')}")
-        lines.append(f"Açıklama: {best.get('turkish_explanation', '-')}")
-        lines.append(f"Eşleşme Oranı: {str(best.get('confidence', '-')).capitalize()}")
-        lines.append(f"Bağlantı: {best.get('url', '-')}")
-        lines.append("")
+    if matches:
+        lines.append("Diğer yakın sonuçlar:")
 
-        why_match = best.get("why_match", "").strip()
-        if why_match:
-            lines.append("💡 Seçim Nedeni:")
-            lines.append(why_match)
-            lines.append("")
-
-    filtered_matches = []
-
-    for match in matches:
-        match_url = match.get("url", "")
-        best_url = best.get("url", "")
-
-        if match_url and best_url and match_url == best_url:
-            continue
-
-        filtered_matches.append(match)
-
-    if filtered_matches:
-        lines.append("🔎 Diğer Yakın Sonuçlar:")
-
-        for index, match in enumerate(filtered_matches[:3], start=1):
-            title = (
-                match.get("translated_title_tr")
-                or match.get("original_title")
-                or "Başlık yok"
-            )
-
-            explanation = match.get("short_explanation_tr", "").strip()
-            confidence = match.get("confidence", "-")
-            url = match.get("url", "-")
-
-            lines.append(f"{index}. {title}")
-            lines.append(f"   Eşleşme: {str(confidence).capitalize()}")
-
-            if explanation:
-                lines.append(f"   Not: {explanation}")
-
-            lines.append(f"   Bağlantı: {url}")
+        for index, match in enumerate(matches[:5], start=1):
+            lines.append(f"{index}. {match.get('translated_title_tr') or match.get('original_title')}")
+            lines.append(f"   Orijinal: {match.get('original_title', '-')}")
+            lines.append(f"   URL: {match.get('url', '-')}")
+            lines.append(f"   Güven: {match.get('confidence', '-')}")
+            lines.append(f"   Açıklama: {match.get('short_explanation_tr', '-')}")
             lines.append("")
 
     if questions:
-        lines.append("❓ Netleştirmem Gerekenler:")
-        for question in questions[:2]:
+        lines.append("Vex'in soruları:")
+
+        for question in questions[:3]:
             lines.append(f"- {question}")
-        lines.append("")
 
-    lines.append("İstersen en iyi eşleşmeyi tek komutla Shopify ürün içeriğine dönüştürebilirim.")
+    lines.append("")
+    lines.append("İstersen en iyi eşleşmeyi Shopify ürün içeriğine çevirebilirim.")
 
-    return "\n".join(lines)
-
-
-@app.post("/site/find-products")
-def site_find_products(request: SiteProductFinderRequest):
-    try:
-        result = find_products_on_site_with_ai(
-            url=request.url,
-            query=request.query,
-            language=request.language,
-            max_pages=request.max_pages,
-        )
-
-        if result.get("success"):
-            result["formatted_output"] = build_product_finder_reply(result)
-
-        return result
-
-    except Exception as error:
-        print("Vex site ürün bulma hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
-            "results": [],
-        }
+    return "\\n".join(lines)
 
 
-@app.post("/site/analyze")
-def analyze_site(request: UrlAnalyzeRequest):
-    try:
-        site_data = extract_site_data(request.url)
+def build_memory_text(memory: dict) -> str:
+    return json.dumps(memory, ensure_ascii=False, indent=2)
 
-        if not site_data.get("success"):
+
+def build_projects_text(projects: list[dict]) -> str:
+    return json.dumps(projects, ensure_ascii=False, indent=2)
+
+
+def normalize_project_data(project_data: dict) -> dict:
+    name = str(project_data.get("name", "")).strip()
+
+    if not name:
+        name = "Yeni Proje"
+
+    project_id = str(project_data.get("id", "")).strip()
+
+    if not project_id:
+        project_id = slugify(name)
+    else:
+        project_id = slugify(project_id)
+
+    main_goals = project_data.get("main_goals", [])
+    notes = project_data.get("notes", [])
+
+    if not isinstance(main_goals, list):
+        main_goals = [str(main_goals)]
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    return {
+        "id": project_id,
+        "name": name,
+        "type": str(project_data.get("type", "Genel proje")).strip() or "Genel proje",
+        "status": str(project_data.get("status", "aktif")).strip() or "aktif",
+        "description": str(project_data.get("description", "")).strip(),
+        "main_goals": [str(item).strip() for item in main_goals if str(item).strip()],
+        "notes": [str(item).strip() for item in notes if str(item).strip()],
+    }
+
+
+def add_project_to_storage(project_data: dict) -> dict:
+    normalized_project = normalize_project_data(project_data)
+
+    projects_data = load_projects()
+
+    for project in projects_data:
+        if project.get("id") == normalized_project["id"]:
             return {
-                **site_data,
-                "analysis": "",
+                "success": True,
+                "message": "Bu proje zaten kayıtlı.",
+                "project": project,
+                "projects": projects_data,
             }
 
-        return analyze_site_data_with_ai(
-            site_data=site_data,
-            user_prompt=request.prompt,
-        )
+    projects_data.append(normalized_project)
+    save_projects(projects_data)
 
-    except Exception as error:
-        print("Vex site analiz hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
-            "analysis": "",
-        }
-
-
-
-@app.post("/computer/plan")
-def computer_plan(request: ComputerPlanRequest):
-    try:
-        return plan_computer_action_from_screen(request.instruction)
-    except Exception as error:
-        print("Vex bilgisayar kontrol plan hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
-        }
-
-
-@app.post("/screen/capture")
-def capture_screen():
-    try:
-        return capture_screen_to_file()
-    except Exception as error:
-        print("Vex ekran yakalama hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
-        }
-
-
-@app.post("/screen/capture-and-analyze")
-def capture_and_analyze_screen(request: ScreenAnalyzeRequest):
-    try:
-        capture_result = capture_screen_to_file()
-
-        if not capture_result.get("success"):
-            return capture_result
-
-        analysis_result = analyze_screen_image(
-            image_path=capture_result["path"],
-            user_prompt=request.prompt,
-        )
-
-        return {
-            **analysis_result,
-            "screenshot": capture_result,
-        }
-
-    except Exception as error:
-        print("Vex ekran analiz hatası:")
-        traceback.print_exc()
-
-        return {
-            "success": False,
-            "message": str(error),
-            "analysis": "",
-        }
-
-
-
-@app.get("/health")
-def health():
     return {
         "success": True,
-        "status": "online",
-        "app": "Vex",
-        "message": "Backend çalışıyor",
+        "message": "Proje başarıyla eklendi.",
+        "project": normalized_project,
+        "projects": projects_data,
     }
 
 
-@app.get("/")
-def root():
-    return {
-        "app": "Vex",
-        "status": "Backend çalışıyor",
-        "message": "Vex backend hazır.",
-    }
+def extract_project_from_chat(message: str) -> dict:
+    client = get_gemini_client()
+
+    if client is None:
+        fallback_name = message.strip()[:60] or "Yeni Proje"
+
+        return normalize_project_data({
+            "name": fallback_name,
+            "type": "Genel proje",
+            "status": "aktif",
+            "description": message.strip(),
+            "main_goals": [
+                "Proje detaylarını Mert ile netleştirmek"
+            ],
+            "notes": [
+                "Bu proje Gemini API key olmadan basit çıkarımla oluşturuldu."
+            ],
+        })
+
+    prompt = f"""
+Sen Vex'in proje oluşturma modülüsün.
+
+Mert'in mesajından yeni proje bilgisi çıkar.
+
+Sadece geçerli JSON döndür.
+Markdown, açıklama veya ekstra metin yazma.
+
+JSON şeması:
+{{
+  "id": "kebab-case-proje-id",
+  "name": "Proje adı",
+  "type": "Proje tipi",
+  "status": "aktif",
+  "description": "Proje açıklaması",
+  "main_goals": ["Hedef 1", "Hedef 2", "Hedef 3"],
+  "notes": ["Not 1", "Not 2"]
+}}
+
+Kurallar:
+- Mesaj Türkçe ise cevap alanları Türkçe olsun.
+- Proje adı net değilse kısa ve anlamlı bir ad üret.
+- id alanı küçük harfli, Türkçe karaktersiz ve tireli olsun.
+- main_goals listesi en az 2, en fazla 5 madde olsun.
+- notes listesi en az 1, en fazla 4 madde olsun.
+- status varsayılan olarak "aktif" olsun.
+
+Mert'in mesajı:
+{message}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview",
+        contents=prompt,
+    )
+
+    raw_text = response.text or "{}"
+    json_text = clean_json_text(raw_text)
+
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        parsed = {
+            "name": message.strip()[:60] or "Yeni Proje",
+            "type": "Genel proje",
+            "status": "aktif",
+            "description": message.strip(),
+            "main_goals": [
+                "Proje detaylarını netleştirmek",
+                "İlk iş planını oluşturmak"
+            ],
+            "notes": [
+                "Gemini çıktısı JSON olarak okunamadığı için basit proje kaydı oluşturuldu."
+            ],
+        }
+
+    return normalize_project_data(parsed)
 
 
 
@@ -2838,13 +2748,29 @@ def workspace_summary():
         if active_project_id and output.get("project_id") == active_project_id
     ]
 
-    suggested_next_step = "Aktif projeye bağlı güncel bir durum yok. Sohbetten devam edebiliriz."
+    active_project_preferences = [
+        preference for preference in preferences_data
+        if preference.get("status") == "active"
+        and (
+            not preference.get("project_id")
+            or preference.get("project_id") == active_project_id
+        )
+    ]
 
-    if active_project_pending_approvals:
-        suggested_next_step = f"{active_project.get('name', 'Proje')} için bekleyen onaylar var. Onay Merkezi'ni kontrol et."
+    suggested_next_step = "Bugün önce açık görevleri ve bekleyen onayları kontrol edelim."
 
-    if active_project_pending_approvals and active_project_high_priority_tasks:
-        suggested_next_step = f"{active_project.get('name', 'Proje')} için hem onaylar hem yüksek öncelikli görevler var."
+    if active_project and active_project_pending_approvals:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için bekleyen onaylar var; önce Onay Merkezi’ni kontrol etmek iyi olur."
+    elif active_project and active_project_high_priority_tasks:
+        suggested_next_step = f"{active_project.get('name', active_project_id)} için yüksek öncelikli görevler var; önce onlardan biriyle başlamak iyi olur."
+    elif pending_approvals:
+        suggested_next_step = "Bekleyen onaylar var; önce Onay Merkezi’ni kontrol etmek iyi olur."
+    elif high_priority_tasks:
+        suggested_next_step = "Yüksek öncelikli görevler var; önce onlardan biriyle başlamak iyi olur."
+    elif active_project:
+        suggested_next_step = f"Aktif proje olarak {active_project.get('name', active_project_id)} üzerinden devam edebiliriz."
+    elif active_projects:
+        suggested_next_step = f"Aktif proje olarak {active_projects[0].get('name', 'ilk proje')} üzerinden devam edebiliriz."
 
     return {
         "success": True,
@@ -2864,17 +2790,161 @@ def workspace_summary():
         "open_tasks": open_tasks,
         "high_priority_tasks": high_priority_tasks,
         "pending_approvals": pending_approvals,
-        "outputs": outputs_data[-10:],
+        "outputs": outputs_data,
+        "preferences": preferences_data,
         "active_project_context": {
-            "tasks": active_project_tasks,
+            "project": active_project,
             "open_tasks": active_project_open_tasks,
             "high_priority_tasks": active_project_high_priority_tasks,
-            "approvals": active_project_approvals,
             "pending_approvals": active_project_pending_approvals,
-            "outputs": active_project_outputs[-10:],
+            "outputs": active_project_outputs,
+            "preferences": active_project_preferences,
+            "all_project_tasks_count": len(active_project_tasks),
+            "open_project_tasks_count": len(active_project_open_tasks),
+            "pending_project_approvals_count": len(active_project_pending_approvals),
+            "project_outputs_count": len(active_project_outputs),
+            "project_preferences_count": len(active_project_preferences),
         },
         "suggested_next_step": suggested_next_step,
     }
+
+
+
+
+@app.post("/site/find-products")
+def site_find_products(request: SiteProductFinderRequest):
+    try:
+        result = find_products_on_site_with_ai(
+            url=request.url,
+            query=request.query,
+            language=request.language,
+            max_pages=request.max_pages,
+        )
+
+        if result.get("success"):
+            result["formatted_output"] = build_product_finder_reply(result)
+
+        return result
+
+    except Exception as error:
+        print("Vex site ürün bulma hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "results": [],
+        }
+
+
+@app.post("/site/analyze")
+def analyze_site(request: UrlAnalyzeRequest):
+    try:
+        site_data = extract_site_data(request.url)
+
+        if not site_data.get("success"):
+            return {
+                **site_data,
+                "analysis": "",
+            }
+
+        return analyze_site_data_with_ai(
+            site_data=site_data,
+            user_prompt=request.prompt,
+        )
+
+    except Exception as error:
+        print("Vex site analiz hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "analysis": "",
+        }
+
+
+
+@app.post("/computer/plan")
+def computer_plan(request: ComputerPlanRequest):
+    try:
+        return plan_computer_action_from_screen(request.instruction)
+    except Exception as error:
+        print("Vex bilgisayar kontrol plan hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+        }
+
+
+@app.post("/screen/capture")
+def capture_screen():
+    try:
+        return capture_screen_to_file()
+    except Exception as error:
+        print("Vex ekran yakalama hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+        }
+
+
+@app.post("/screen/capture-and-analyze")
+def capture_and_analyze_screen(request: ScreenAnalyzeRequest):
+    try:
+        capture_result = capture_screen_to_file()
+
+        if not capture_result.get("success"):
+            return capture_result
+
+        analysis_result = analyze_screen_image(
+            image_path=capture_result["path"],
+            user_prompt=request.prompt,
+        )
+
+        return {
+            **analysis_result,
+            "screenshot": capture_result,
+        }
+
+    except Exception as error:
+        print("Vex ekran analiz hatası:")
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "message": str(error),
+            "analysis": "",
+        }
+
+
+
+@app.get("/health")
+def health():
+    return {
+        "success": True,
+        "status": "online",
+        "app": "Vex",
+        "message": "Backend çalışıyor",
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "app": "Vex",
+        "status": "Backend çalışıyor",
+        "message": "Vex backend hazır.",
+    }
+
+
+
+
+
 
 
 @app.get("/reminders")
@@ -3873,51 +3943,6 @@ def listen_and_transcribe_speech(request: ListenSpeechRequest):
         }
 
 
-
-def build_memory_text(memory) -> str:
-    if not memory:
-        return "Henüz kalıcı hafıza kaydı yok."
-
-    try:
-        if isinstance(memory, dict):
-            lines = []
-
-            for key, value in memory.items():
-                if isinstance(value, list):
-                    lines.append(f"{key}:")
-                    for item in value:
-                        lines.append(f"- {item}")
-                else:
-                    lines.append(f"{key}: {value}")
-
-            return "\n".join(lines) if lines else "Henüz kalıcı hafıza kaydı yok."
-
-        if isinstance(memory, list):
-            return "\n".join([f"- {item}" for item in memory]) if memory else "Henüz kalıcı hafıza kaydı yok."
-
-        return str(memory)
-    except Exception:
-        return "Hafıza okunurken hata oluştu."
-
-
-def build_projects_text(projects: list[dict]) -> str:
-    if not projects:
-        return "Henüz kayıtlı proje yok."
-
-    lines = []
-
-    for project in projects:
-        lines.append(f"- {project.get('name', project.get('id', 'İsimsiz proje'))}")
-        lines.append(f"  id: {project.get('id', '')}")
-        lines.append(f"  tür: {project.get('type', '')}")
-        lines.append(f"  durum: {project.get('status', '')}")
-
-        description = project.get("description", "")
-        if description:
-            lines.append(f"  açıklama: {description}")
-
-    return "\n".join(lines)
-
 def build_conversation_text(history: list[ChatMessage], current_message: str) -> str:
     conversation_lines = []
 
@@ -4061,32 +4086,70 @@ def chat(request: ChatRequest):
         ]
 
         workspace_summary_data = {
-            "active_project": active_project_data.get("project") if active_project_data else None,
-            "active_task": active_task_data.get("task") if active_task_data else None,
+            "active_project": active_project_data,
+            "active_task": active_task_data,
+            "active_brand_profile": active_brand_profile,
             "learned_preferences": relevant_preferences,
+            "counts": {
+                "projects": len(projects_data),
+                "open_tasks": len(open_tasks),
+                "high_priority_tasks": len(high_priority_tasks),
+                "pending_approvals": len(pending_approvals),
+                "outputs": len(outputs_data),
+                "preferences": len(preferences_data),
+            },
+            "open_tasks": open_tasks[:10],
+            "high_priority_tasks": high_priority_tasks[:10],
+            "pending_approvals": pending_approvals[:10],
+            "outputs": outputs_data[-10:],
+            "active_outputs_context": {
+                "active_project_outputs": active_project_outputs[-10:],
+                "active_task_outputs": active_task_outputs[-10:],
+            },
+            "active_project_context": {
+                "project": active_project,
+                "open_tasks": active_project_open_tasks[:10],
+                "high_priority_tasks": active_project_high_priority_tasks[:10],
+                "pending_approvals": active_project_pending_approvals[:10],
+                "outputs": active_project_outputs[-10:],
+            },
         }
 
         memory_text = build_memory_text(memory_data)
-        
-        # Proje ve görev listelerini yapay zekaya çok detaylı vermeyeceğiz
-        # Sadece bağlamı vermek yeterli, aksi takdirde sürekli "şu görev var" diyor
+        projects_text = build_projects_text(projects_data)
         workspace_text = json.dumps(workspace_summary_data, ensure_ascii=False, indent=2)
 
         system_context = f"""
-Senin adın Vex. Sen Mert'in kişisel yapay zeka iş arkadaşısın.
+Senin adın Vex.
+Sen Mert'in kişisel yapay zeka iş arkadaşısın.
 
-Kalıcı hafızan ve kurallar:
+Kalıcı hafızan:
 {memory_text}
 
-Aktif bağlam:
+Kayıtlı projeler:
+{projects_text}
+
+Çalışma alanı, aktif proje, aktif görev, kayıtlı çıktılar ve öğrenilmiş tercihler:
 {workspace_text}
 
-ÇOK ÖNEMLİ DAVRANIŞ KURALLARI:
-1. Mert ne sorduysa/ne istediyse SADECE ona odaklan. 
-2. Asla "Şu görev var", "Şu proje bekliyor", "Buna başlayalım mı?" gibi YÖNLENDİRMELER YAPMA.
-3. Mesajlarının girişinde "şunu hallettik", "şu taslağımız cebimizde" gibi durum özetleri VERME.
-4. "Mert", "Selam Mert" kelimelerini her cümlenin başına koyma, çok doğal ve kısa yanıt ver.
-5. Bir soru sorulduğunda en kısa ve net cevabı ver, uzatma.
+Davranış kuralların:
+- Basit bir bot gibi davranma.
+- Mert ile doğal, pratik ve samimi konuş.
+- Kısa, net ve işe yarar cevaplar ver.
+- Mert teknik konularda adım adım yönlendirilmek istiyor.
+- Bir seferde çok fazla şey verme.
+- Kritik işlemlerde Mert'ten onay al.
+- Aktif proje seçiliyse kısa ve bağlamsız konuşmalarda aktif projeyi varsayılan bağlam olarak kullan.
+- Aktif görev seçiliyse “devam et”, “başla”, “bunu hazırla”, “üret”, “yapalım” gibi komutlarda aktif görevi bağlam olarak kullan.
+- Aktif görev açıksa mümkünse doğrudan somut ilk çıktıyı üret.
+- Aktif görev tamamlandıysa yeni görev seçmeyi öner.
+- Mert kayıtlı çıktı, son taslak, hero metni veya kayıtlı metin sorarsa outputs verisini kullan.
+- Kayıtlı çıktıyı sorarsa yeniden uydurma; kayıtlı içeriği özetle veya aynen göster.
+- Öğrenilmiş tercihler varsa, içerik üretirken bunları marka profilinden daha güncel kabul et.
+- Aktif projeye bağlı tercihler genel tercihlerden daha önceliklidir.
+- Aktif göreve bağlı tercihler proje tercihlerinden daha önceliklidir.
+- Mert’i soru yağmuruna tutma; sadece gerçekten öğrenmeye değer yerde kısa soru sor.
+- Her şeyi baştan sabitlemeye çalışma; kervanı yolda düzme mantığıyla gerçek kullanımdan öğren.
 """
 
         conversation_text = build_conversation_text(

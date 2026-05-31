@@ -136,6 +136,8 @@ type WorkspaceSummary = {
     open_tasks: number;
     high_priority_tasks: number;
     pending_approvals: number;
+    outputs?: number;
+    preferences?: number;
   };
   active_projects: ProjectData[];
   open_tasks: TaskData[];
@@ -237,6 +239,7 @@ function App() {
   const isRecordingRef = useRef(false);
   const isTranscribingRef = useRef(false);
   const isSendingRef = useRef(false);
+  const isCheckingBackendRef = useRef(false);
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -245,6 +248,7 @@ function App() {
       text: "Hazırım Mert. Artık mikrofonu başlatıp durdurarak konuşmanı dinleyebiliyorum, backend durumunu takip ediyorum ve sohbetten proje oluşturabiliyorum.",
     },
   ]);
+  const [isTyping, setIsTyping] = useState(false);
 
   useEffect(() => {
     checkBackendHealth({ force: true });
@@ -312,86 +316,6 @@ function App() {
     setBackendMessage("Backend bağlantısı kontrol edildi.");
 
     try {
-      const hardReminderText = cleanInput.toLocaleLowerCase("tr-TR");
-      const isHardReminderCommand =
-        hardReminderText.includes("hatırlat") ||
-        hardReminderText.includes("hatirlat") ||
-        hardReminderText.includes("beni uyar") ||
-        hardReminderText.includes("uyar") ||
-        hardReminderText.includes("alarm kur") ||
-        hardReminderText.includes("dakika sonra") ||
-        hardReminderText.includes("saat sonra");
-
-      if (isHardReminderCommand) {
-        try {
-          const response = await fetch("http://127.0.0.1:8000/reminders/from-chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              message: cleanInput,
-              project_id: activeProjectId,
-              task_id: activeTaskId,
-            }),
-          });
-
-          const rawText = await response.text();
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${rawText}`);
-          }
-
-          const reminderResult = JSON.parse(rawText);
-          const reminder = reminderResult.reminder;
-
-          const reminderReplyText =
-            reminderResult.success && reminder
-              ? `Tamam Mert, hatırlatmayı kurdum.
-
-Başlık: ${reminder.title}
-Zaman: ${reminder.remind_at}
-Proje: ${reminder.project_id || "Genel"}
-Görev: ${reminder.task_id || "Bağlı görev yok"}
-
-Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
-              : reminderResult.message || "Hatırlatmayı oluşturamadım Mert.";
-
-          const reminderReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: reminderReplyText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, reminderReply]);
-
-          try {
-            await loadReminders();
-          } catch (loadError) {
-            console.error("Hatırlatma listesi yenilenemedi:", loadError);
-          }
-
-          speakText(reminderReplyText);
-          return;
-        } catch (error) {
-          console.error("Sert hatırlatma route hatası:", error);
-
-          const errorText = `Hatırlatmayı oluştururken teknik hata aldım Mert: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-
-          const errorReply: Message = {
-            id: Date.now() + 2,
-            sender: "Vex",
-            text: errorText,
-          };
-
-          setMessages((currentMessages) => [...currentMessages, errorReply]);
-          speakText(errorText);
-          return;
-        }
-      }
-
       let response = await fetch("http://127.0.0.1:8000/health", {
         method: "GET",
         cache: "no-store",
@@ -441,12 +365,12 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
   function slugify(text: string) {
     return text
       .toLocaleLowerCase("tr-TR")
-      .replaceAll("ı", "i")
-      .replaceAll("ğ", "g")
-      .replaceAll("ü", "u")
-      .replaceAll("ş", "s")
-      .replaceAll("ö", "o")
-      .replaceAll("ç", "c")
+      .replace(/ı/g, "i")
+      .replace(/ğ/g, "g")
+      .replace(/ü/g, "u")
+      .replace(/ş/g, "s")
+      .replace(/ö/g, "o")
+      .replace(/ç/g, "c")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
   }
@@ -563,6 +487,34 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
         lowerText.includes("hazırla") ||
         lowerText.includes("hazirla")
       )
+    );
+  }
+
+  function shouldFindProductsOnSiteFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+    const url = extractFirstUrl(text);
+
+    if (!url) return false;
+
+    return (
+      lowerText.includes("ürünü bul") ||
+      lowerText.includes("urunu bul") ||
+      lowerText.includes("ürününü bul") ||
+      lowerText.includes("urununu bul") ||
+      lowerText.includes("ürün bul") ||
+      lowerText.includes("urun bul") ||
+      lowerText.includes("bulabilir misin") ||
+      lowerText.includes("bulur musun") ||
+      lowerText.includes("bul bana") ||
+      lowerText.includes("sitede bul") ||
+      lowerText.includes("sitede ara") ||
+      lowerText.includes("bu sitede") ||
+      lowerText.includes("şu sitede") ||
+      lowerText.includes("su sitede") ||
+      lowerText.includes("sitesinde") ||
+      lowerText.includes("çekçe sitede") ||
+      lowerText.includes("cekce sitede") ||
+      lowerText.includes("almanca sitede")
     );
   }
 
@@ -774,6 +726,53 @@ Zamanı geldiğinde Vex açık olduğu sürece seni uyaracağım.`
     }
 
     return "Shopify içerik paketi hazırlandı ama formatlı çıktı boş döndü.";
+  }
+
+  async function findProductsOnSiteFromChat(text: string) {
+    const url = extractFirstUrl(text);
+
+    const controller = new AbortController();
+    // 90 seconds timeout because backend crawls multiple pages and might take a long time
+    const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/site/find-products", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url,
+          query: text,
+          language: "Turkish",
+          max_pages: 15,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Site ürün bulma endpoint hatası: HTTP ${response.status}: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error: unknown) {
+      clearTimeout(timeoutId);
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error("İstek zaman aşımına uğradı. Site çok yavaş yanıt verdi veya bot koruması kullanıyor olabilir.");
+      }
+      throw error;
+    }
+  }
+
+  function buildProductFinderReply(result: any) {
+    if (!result.success) {
+      return result.message || "Sitede ürün araması yapamadım Mert.";
+    }
+
+    return result.formatted_output || "Ürün araması tamamlandı ama formatlı çıktı boş döndü.";
   }
 
   async function analyzeSiteFromChat(text: string) {
@@ -1739,14 +1738,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
-  function toggleVoiceRecording() {
-    if (isRecordingRef.current) {
-      stopVoiceRecordingAndTranscribe();
-    } else {
-      startVoiceRecording();
-    }
-  }
-
   function openDashboardView() {
     setActiveView("dashboard");
     loadActiveProject();
@@ -1791,51 +1782,6 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
-      if (shouldCreateShopifyContentFromChat(cleanInput)) {
-        const shopifyResult = await createShopifyContentFromChat(cleanInput);
-        const shopifyReplyText = buildShopifyContentReply(shopifyResult);
-
-        const shopifyReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: shopifyReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, shopifyReply]);
-        speakText(shopifyReplyText);
-        return;
-      }
-
-      if (shouldAnalyzeSiteFromChat(cleanInput)) {
-        const siteResult = await analyzeSiteFromChat(cleanInput);
-        const siteReplyText = buildSiteAnalysisReply(siteResult);
-
-        const siteReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: siteReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, siteReply]);
-        speakText(siteReplyText);
-        return;
-      }
-
-      if (shouldAnalyzeScreenFromChat(cleanInput)) {
-        const screenResult = await analyzeScreenFromChat(cleanInput);
-        const screenReplyText = buildScreenAnalysisReply(screenResult);
-
-        const screenReply: Message = {
-          id: Date.now() + 2,
-          sender: "Vex",
-          text: screenReplyText,
-        };
-
-        setMessages((currentMessages) => [...currentMessages, screenReply]);
-        speakText(screenReplyText);
-        return;
-      }
-
     if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
       return;
     }
@@ -1845,23 +1791,127 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       return;
     }
 
-    stopSpeaking();
-    setBusyState(true);
-
     const userMessage: Message = {
       id: Date.now(),
       sender: "Sen",
       text: cleanInput,
     };
 
+    setMessages((currentMessages) => [...currentMessages, userMessage]);
+    setInput("");
+    stopSpeaking();
+    updateSending(true);
+    setBusyState(true);
+    setIsTyping(true);
+
     const historyForBackend = messages.map((message) => ({
       sender: message.sender,
       text: message.text,
     }));
 
-    setMessages((currentMessages) => [...currentMessages, userMessage]);
-    setInput("");
-    updateSending(true);
+      if (shouldFindProductsOnSiteFromChat(cleanInput)) {
+        try {
+          const productFinderResult = await findProductsOnSiteFromChat(cleanInput);
+          const productFinderReplyText = buildProductFinderReply(productFinderResult);
+          const productFinderReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: productFinderReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, productFinderReply]);
+          speakText(productFinderReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Ürün araması yaparken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
+
+      if (shouldCreateShopifyContentFromChat(cleanInput)) {
+        try {
+          const shopifyResult = await createShopifyContentFromChat(cleanInput);
+          const shopifyReplyText = buildShopifyContentReply(shopifyResult);
+          const shopifyReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: shopifyReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, shopifyReply]);
+          speakText(shopifyReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Shopify içeriği hazırlarken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
+
+      if (shouldAnalyzeSiteFromChat(cleanInput)) {
+        try {
+          const siteResult = await analyzeSiteFromChat(cleanInput);
+          const siteReplyText = buildSiteAnalysisReply(siteResult);
+          const siteReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: siteReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, siteReply]);
+          speakText(siteReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Site analizi yaparken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
+
+      if (shouldAnalyzeScreenFromChat(cleanInput)) {
+        try {
+          const screenResult = await analyzeScreenFromChat(cleanInput);
+          const screenReplyText = buildScreenAnalysisReply(screenResult);
+          const screenReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: screenReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, screenReply]);
+          speakText(screenReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Ekran analizi yaparken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
 
     try {
       // VEX_HARD_REMINDER_ROUTE_START
@@ -2208,6 +2258,7 @@ Durum: ${outputResult.output.status}
     } finally {
       updateSending(false);
       setBusyState(false);
+      setIsTyping(false);
       await checkBackendHealth({ force: true });
     }
   }
@@ -2621,6 +2672,12 @@ Durum: ${outputResult.output.status}
                   <p>{message.text}</p>
                 </div>
               ))}
+              {isTyping ? (
+                <div className="message assistant">
+                  <span>Vex</span>
+                  <p className="typing-indicator">yazıyor<span className="typing-dots">...</span></p>
+                </div>
+              ) : null}
             </div>
 
             <div className="composer">

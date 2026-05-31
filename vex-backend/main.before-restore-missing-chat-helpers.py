@@ -2121,74 +2121,6 @@ def extract_product_page_summary(url: str) -> dict:
         if image.get("alt", "").strip()
     ]
 
-    # Fiyat çıkarma
-    price = ""
-    
-    # 1. Meta property (Open Graph / Shopify / Yoast) - EN GÜVENİLİR YÖNTEM!
-    if not price:
-        price_meta = (
-            soup.find("meta", property="product:price:amount") or
-            soup.find("meta", attrs={"name": "product:price:amount"}) or
-            soup.find("meta", itemprop="price")
-        )
-        if price_meta and price_meta.get("content", "").strip():
-            price = price_meta.get("content", "").strip()
-
-    # 2. JSON-LD schema.org/Product içinde price (Yalnızca "Product" tipindeki şemadan al)
-    if not price:
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                ld = json.loads(script.get_text(strip=True))
-                
-                # Bazen liste olabilir
-                ld_list = ld if isinstance(ld, list) else [ld]
-                
-                # Bazen "@graph" içinde olabilir (Yoast SEO)
-                if isinstance(ld, dict) and "@graph" in ld:
-                    ld_list = ld["@graph"]
-
-                for item in ld_list:
-                    if isinstance(item, dict) and item.get("@type") == "Product":
-                        offers = item.get("offers", {})
-                        if isinstance(offers, dict) and offers.get("price"):
-                            price = str(offers.get("price"))
-                            break
-                        if isinstance(offers, list) and len(offers) > 0:
-                            price = str(offers[0].get("price", ""))
-                            break
-            except (json.JSONDecodeError, AttributeError, TypeError):
-                pass
-            
-            if price:
-                break
-
-    # 3. HTML attribute "data-price" (sepete ekle butonlarında falan kesin fiyat bulunur)
-    if not price:
-        button_with_price = soup.find(attrs={"data-price": True})
-        if button_with_price and button_with_price.get("data-price", "").strip():
-            price = button_with_price.get("data-price").strip()
-
-    # 4. Regex fallback
-    if not price:
-        price_match = re.search(
-            r'(?:[$€£])\s*(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s*(?:[$€£€]|EUR|USD)',
-            body_text[:500],
-            re.IGNORECASE,
-        )
-        if price_match:
-            price = price_match.group(0).strip()
-
-    # Para birimini de çıkar
-    currency = ""
-    currency_meta = soup.find("meta", property="product:price:currency")
-    if currency_meta and currency_meta.get("content", "").strip():
-        currency = currency_meta.get("content", "").strip()
-
-    if not currency and price:
-        currency_match = re.match(r'([$€£€]|EUR|USD|TRY)', price)
-        if currency_match:
-            currency = currency_match.group(1)
-
     return {
         "success": True,
         "url": result.get("final_url", url),
@@ -2196,8 +2128,6 @@ def extract_product_page_summary(url: str) -> dict:
         "meta_description": meta_description,
         "h1": h1,
         "h2": h2,
-        "price": price,
-        "currency": currency,
         "body_excerpt": body_excerpt,
         "image_alt_texts": alt_texts[:10],
         "word_count": len(body_text.split()),
@@ -2375,26 +2305,26 @@ def build_product_finder_reply(result: dict) -> str:
 
     lines = []
 
-    lines.append("🔍 Ürün aramasını tamamladım Mert.")
-    lines.append(f"Toplam {pages_scanned} sayfayı taradım ve sonuçları derledim.")
+    lines.append("Ürün araması yaptım Mert.")
+    lines.append(f"{pages_scanned} sayfa taradım.")
     lines.append("")
 
     if summary:
-        lines.append("📌 Kısa Sonuç")
+        lines.append("Kısa sonuç:")
         lines.append(summary)
         lines.append("")
 
-    if best and best.get("url"):
-        lines.append("⭐ En İyi Eşleşme")
+    if best:
+        lines.append("En iyi eşleşme:")
         lines.append(f"Ürün: {best.get('original_title', '-')}")
-        lines.append(f"Açıklama: {best.get('turkish_explanation', '-')}")
-        lines.append(f"Eşleşme Oranı: {str(best.get('confidence', '-')).capitalize()}")
-        lines.append(f"Bağlantı: {best.get('url', '-')}")
+        lines.append(f"Türkçesi: {best.get('turkish_explanation', '-')}")
+        lines.append(f"Güven: {best.get('confidence', '-')}")
+        lines.append(f"Link: {best.get('url', '-')}")
         lines.append("")
 
         why_match = best.get("why_match", "").strip()
         if why_match:
-            lines.append("💡 Seçim Nedeni:")
+            lines.append("Neden bunu seçtim:")
             lines.append(why_match)
             lines.append("")
 
@@ -2410,9 +2340,9 @@ def build_product_finder_reply(result: dict) -> str:
         filtered_matches.append(match)
 
     if filtered_matches:
-        lines.append("🔎 Diğer Yakın Sonuçlar:")
+        lines.append("Diğer yakın sonuçlar:")
 
-        for index, match in enumerate(filtered_matches[:3], start=1):
+        for index, match in enumerate(filtered_matches[:4], start=1):
             title = (
                 match.get("translated_title_tr")
                 or match.get("original_title")
@@ -2424,23 +2354,23 @@ def build_product_finder_reply(result: dict) -> str:
             url = match.get("url", "-")
 
             lines.append(f"{index}. {title}")
-            lines.append(f"   Eşleşme: {str(confidence).capitalize()}")
+            lines.append(f"   Güven: {confidence}")
 
             if explanation:
                 lines.append(f"   Not: {explanation}")
 
-            lines.append(f"   Bağlantı: {url}")
+            lines.append(f"   Link: {url}")
             lines.append("")
 
     if questions:
-        lines.append("❓ Netleştirmem Gerekenler:")
+        lines.append("Netleştirmem gereken şey:")
         for question in questions[:2]:
             lines.append(f"- {question}")
         lines.append("")
 
-    lines.append("İstersen en iyi eşleşmeyi tek komutla Shopify ürün içeriğine dönüştürebilirim.")
+    lines.append("İstersen en iyi eşleşmeyi şimdi Shopify ürün içeriğine çevirebilirim.")
 
-    return "\n".join(lines)
+    return "\\n".join(lines)
 
 
 @app.post("/site/find-products")
@@ -2577,304 +2507,6 @@ def root():
 
 
 
-
-@app.get("/workspace/active-task")
-def active_task():
-    return {
-        "success": True,
-        **get_active_task_data(),
-    }
-
-
-@app.post("/workspace/active-task")
-def set_active_task(request: ActiveTaskRequest):
-    clean_task_id = request.task_id.strip().lower()
-
-    if not clean_task_id:
-        save_active_task("")
-
-        return {
-            "success": True,
-            "message": "Aktif görev temizlendi.",
-            "task_id": "",
-            "task": None,
-        }
-
-    tasks_data = load_tasks()
-
-    for task in tasks_data:
-        if task.get("id") == clean_task_id:
-            save_active_task(clean_task_id)
-
-            return {
-                "success": True,
-                "message": "Aktif görev güncellendi.",
-                "task_id": clean_task_id,
-                "task": task,
-            }
-
-    return {
-        "success": False,
-        "message": "Bu id ile kayıtlı görev bulunamadı.",
-        "task_id": clean_task_id,
-        "task": None,
-    }
-
-
-@app.get("/workspace/active-project/detail")
-def active_project_detail():
-    active_data = get_active_project_data()
-    active_project_id = active_data.get("project_id", "")
-    active_project = active_data.get("project")
-
-    tasks_data = load_tasks()
-    approvals_data = load_approvals()
-    outputs_data = load_outputs()
-    preferences_data = load_preferences()
-
-    if not active_project_id or not active_project:
-        return {
-            "success": True,
-            "has_active_project": False,
-            "project_id": "",
-            "project": None,
-            "tasks": [],
-            "open_tasks": [],
-            "high_priority_tasks": [],
-            "approvals": [],
-            "pending_approvals": [],
-            "outputs": [],
-            "preferences": [],
-            "counts": {
-                "tasks": 0,
-                "open_tasks": 0,
-                "high_priority_tasks": 0,
-                "approvals": 0,
-                "pending_approvals": 0,
-                "outputs": 0,
-                "preferences": 0,
-            },
-            "suggested_next_step": "Önce aktif bir proje seçelim.",
-        }
-
-    project_tasks = [
-        task for task in tasks_data
-        if task.get("project_id") == active_project_id
-    ]
-
-    open_tasks = [
-        task for task in project_tasks
-        if task.get("status", "").lower() != "tamamlandı"
-    ]
-
-    high_priority_tasks = [
-        task for task in open_tasks
-        if task.get("priority", "").lower() in ["yüksek", "kritik"]
-    ]
-
-    project_approvals = [
-        approval for approval in approvals_data
-        if approval.get("project_id") == active_project_id
-    ]
-
-    pending_approvals = [
-        approval for approval in project_approvals
-        if approval.get("status", "").lower() == "bekliyor"
-    ]
-
-    project_outputs = [
-        output for output in outputs_data
-        if output.get("project_id") == active_project_id
-    ]
-
-    project_preferences = [
-        preference for preference in preferences_data
-        if preference.get("status") == "active"
-        and (
-            not preference.get("project_id")
-            or preference.get("project_id") == active_project_id
-        )
-    ]
-
-    suggested_next_step = f"{active_project.get('name', active_project_id)} için sıradaki işi birlikte netleştirebiliriz."
-
-    if pending_approvals:
-        suggested_next_step = f"{active_project.get('name', active_project_id)} için bekleyen onaylar var; önce onları kontrol etmek iyi olur."
-    elif high_priority_tasks:
-        suggested_next_step = f"{active_project.get('name', active_project_id)} için yüksek öncelikli görevler var; önce onlardan biriyle başlayalım."
-    elif open_tasks:
-        suggested_next_step = f"{active_project.get('name', active_project_id)} için açık görevler var; sıradaki görevi seçebiliriz."
-
-    return {
-        "success": True,
-        "has_active_project": True,
-        "project_id": active_project_id,
-        "project": active_project,
-        "tasks": project_tasks,
-        "open_tasks": open_tasks,
-        "high_priority_tasks": high_priority_tasks,
-        "approvals": project_approvals,
-        "pending_approvals": pending_approvals,
-        "outputs": project_outputs,
-        "preferences": project_preferences,
-        "counts": {
-            "tasks": len(project_tasks),
-            "open_tasks": len(open_tasks),
-            "high_priority_tasks": len(high_priority_tasks),
-            "approvals": len(project_approvals),
-            "pending_approvals": len(pending_approvals),
-            "outputs": len(project_outputs),
-            "preferences": len(project_preferences),
-        },
-        "suggested_next_step": suggested_next_step,
-    }
-
-@app.get("/workspace/active-project")
-def active_project():
-    return {
-        "success": True,
-        **get_active_project_data(),
-    }
-
-
-@app.post("/workspace/active-project")
-def set_active_project(request: ActiveProjectRequest):
-    clean_project_id = request.project_id.strip().lower()
-
-    if not clean_project_id:
-        save_active_project("")
-
-        return {
-            "success": True,
-            "message": "Aktif proje temizlendi.",
-            "project_id": "",
-            "project": None,
-        }
-
-    projects_data = load_projects()
-
-    for project in projects_data:
-        if project.get("id") == clean_project_id:
-            save_active_project(clean_project_id)
-
-            return {
-                "success": True,
-                "message": "Aktif proje güncellendi.",
-                "project_id": clean_project_id,
-                "project": project,
-            }
-
-    return {
-        "success": False,
-        "message": "Bu id ile kayıtlı proje bulunamadı.",
-        "project_id": clean_project_id,
-        "project": None,
-    }
-
-
-@app.get("/workspace/summary")
-def workspace_summary():
-    projects_data = load_projects()
-    tasks_data = load_tasks()
-    approvals_data = load_approvals()
-    outputs_data = load_outputs()
-    preferences_data = load_preferences()
-
-    active_project_data = get_active_project_data()
-    active_project = active_project_data.get("project")
-    active_project_id = active_project_data.get("project_id", "")
-
-    active_task_data = get_active_task_data()
-    active_task = active_task_data.get("task")
-    active_task_id = active_task_data.get("task_id", "")
-
-    active_projects = [
-        project for project in projects_data
-        if project.get("status", "").lower() == "aktif"
-    ]
-
-    open_tasks = [
-        task for task in tasks_data
-        if task.get("status", "").lower() != "tamamlandı"
-    ]
-
-    high_priority_tasks = [
-        task for task in open_tasks
-        if task.get("priority", "").lower() in ["yüksek", "kritik"]
-    ]
-
-    pending_approvals = [
-        approval for approval in approvals_data
-        if approval.get("status", "").lower() == "bekliyor"
-    ]
-
-    active_project_tasks = [
-        task for task in tasks_data
-        if active_project_id and task.get("project_id") == active_project_id
-    ]
-
-    active_project_open_tasks = [
-        task for task in active_project_tasks
-        if task.get("status", "").lower() != "tamamlandı"
-    ]
-
-    active_project_high_priority_tasks = [
-        task for task in active_project_open_tasks
-        if task.get("priority", "").lower() in ["yüksek", "kritik"]
-    ]
-
-    active_project_approvals = [
-        approval for approval in approvals_data
-        if active_project_id and approval.get("project_id") == active_project_id
-    ]
-
-    active_project_pending_approvals = [
-        approval for approval in active_project_approvals
-        if approval.get("status", "").lower() == "bekliyor"
-    ]
-
-    active_project_outputs = [
-        output for output in outputs_data
-        if active_project_id and output.get("project_id") == active_project_id
-    ]
-
-    suggested_next_step = "Aktif projeye bağlı güncel bir durum yok. Sohbetten devam edebiliriz."
-
-    if active_project_pending_approvals:
-        suggested_next_step = f"{active_project.get('name', 'Proje')} için bekleyen onaylar var. Onay Merkezi'ni kontrol et."
-
-    if active_project_pending_approvals and active_project_high_priority_tasks:
-        suggested_next_step = f"{active_project.get('name', 'Proje')} için hem onaylar hem yüksek öncelikli görevler var."
-
-    return {
-        "success": True,
-        "active_project": active_project,
-        "active_project_id": active_project_id,
-        "active_task": active_task,
-        "active_task_id": active_task_id,
-        "counts": {
-            "active_projects": len(active_projects),
-            "open_tasks": len(open_tasks),
-            "high_priority_tasks": len(high_priority_tasks),
-            "pending_approvals": len(pending_approvals),
-            "outputs": len(outputs_data),
-            "preferences": len(preferences_data),
-        },
-        "active_projects": active_projects,
-        "open_tasks": open_tasks,
-        "high_priority_tasks": high_priority_tasks,
-        "pending_approvals": pending_approvals,
-        "outputs": outputs_data[-10:],
-        "active_project_context": {
-            "tasks": active_project_tasks,
-            "open_tasks": active_project_open_tasks,
-            "high_priority_tasks": active_project_high_priority_tasks,
-            "approvals": active_project_approvals,
-            "pending_approvals": active_project_pending_approvals,
-            "outputs": active_project_outputs[-10:],
-        },
-        "suggested_next_step": suggested_next_step,
-    }
 
 
 @app.get("/reminders")
@@ -3873,51 +3505,6 @@ def listen_and_transcribe_speech(request: ListenSpeechRequest):
         }
 
 
-
-def build_memory_text(memory) -> str:
-    if not memory:
-        return "Henüz kalıcı hafıza kaydı yok."
-
-    try:
-        if isinstance(memory, dict):
-            lines = []
-
-            for key, value in memory.items():
-                if isinstance(value, list):
-                    lines.append(f"{key}:")
-                    for item in value:
-                        lines.append(f"- {item}")
-                else:
-                    lines.append(f"{key}: {value}")
-
-            return "\n".join(lines) if lines else "Henüz kalıcı hafıza kaydı yok."
-
-        if isinstance(memory, list):
-            return "\n".join([f"- {item}" for item in memory]) if memory else "Henüz kalıcı hafıza kaydı yok."
-
-        return str(memory)
-    except Exception:
-        return "Hafıza okunurken hata oluştu."
-
-
-def build_projects_text(projects: list[dict]) -> str:
-    if not projects:
-        return "Henüz kayıtlı proje yok."
-
-    lines = []
-
-    for project in projects:
-        lines.append(f"- {project.get('name', project.get('id', 'İsimsiz proje'))}")
-        lines.append(f"  id: {project.get('id', '')}")
-        lines.append(f"  tür: {project.get('type', '')}")
-        lines.append(f"  durum: {project.get('status', '')}")
-
-        description = project.get("description", "")
-        if description:
-            lines.append(f"  açıklama: {description}")
-
-    return "\n".join(lines)
-
 def build_conversation_text(history: list[ChatMessage], current_message: str) -> str:
     conversation_lines = []
 
@@ -4061,32 +3648,70 @@ def chat(request: ChatRequest):
         ]
 
         workspace_summary_data = {
-            "active_project": active_project_data.get("project") if active_project_data else None,
-            "active_task": active_task_data.get("task") if active_task_data else None,
+            "active_project": active_project_data,
+            "active_task": active_task_data,
+            "active_brand_profile": active_brand_profile,
             "learned_preferences": relevant_preferences,
+            "counts": {
+                "projects": len(projects_data),
+                "open_tasks": len(open_tasks),
+                "high_priority_tasks": len(high_priority_tasks),
+                "pending_approvals": len(pending_approvals),
+                "outputs": len(outputs_data),
+                "preferences": len(preferences_data),
+            },
+            "open_tasks": open_tasks[:10],
+            "high_priority_tasks": high_priority_tasks[:10],
+            "pending_approvals": pending_approvals[:10],
+            "outputs": outputs_data[-10:],
+            "active_outputs_context": {
+                "active_project_outputs": active_project_outputs[-10:],
+                "active_task_outputs": active_task_outputs[-10:],
+            },
+            "active_project_context": {
+                "project": active_project,
+                "open_tasks": active_project_open_tasks[:10],
+                "high_priority_tasks": active_project_high_priority_tasks[:10],
+                "pending_approvals": active_project_pending_approvals[:10],
+                "outputs": active_project_outputs[-10:],
+            },
         }
 
         memory_text = build_memory_text(memory_data)
-        
-        # Proje ve görev listelerini yapay zekaya çok detaylı vermeyeceğiz
-        # Sadece bağlamı vermek yeterli, aksi takdirde sürekli "şu görev var" diyor
+        projects_text = build_projects_text(projects_data)
         workspace_text = json.dumps(workspace_summary_data, ensure_ascii=False, indent=2)
 
         system_context = f"""
-Senin adın Vex. Sen Mert'in kişisel yapay zeka iş arkadaşısın.
+Senin adın Vex.
+Sen Mert'in kişisel yapay zeka iş arkadaşısın.
 
-Kalıcı hafızan ve kurallar:
+Kalıcı hafızan:
 {memory_text}
 
-Aktif bağlam:
+Kayıtlı projeler:
+{projects_text}
+
+Çalışma alanı, aktif proje, aktif görev, kayıtlı çıktılar ve öğrenilmiş tercihler:
 {workspace_text}
 
-ÇOK ÖNEMLİ DAVRANIŞ KURALLARI:
-1. Mert ne sorduysa/ne istediyse SADECE ona odaklan. 
-2. Asla "Şu görev var", "Şu proje bekliyor", "Buna başlayalım mı?" gibi YÖNLENDİRMELER YAPMA.
-3. Mesajlarının girişinde "şunu hallettik", "şu taslağımız cebimizde" gibi durum özetleri VERME.
-4. "Mert", "Selam Mert" kelimelerini her cümlenin başına koyma, çok doğal ve kısa yanıt ver.
-5. Bir soru sorulduğunda en kısa ve net cevabı ver, uzatma.
+Davranış kuralların:
+- Basit bir bot gibi davranma.
+- Mert ile doğal, pratik ve samimi konuş.
+- Kısa, net ve işe yarar cevaplar ver.
+- Mert teknik konularda adım adım yönlendirilmek istiyor.
+- Bir seferde çok fazla şey verme.
+- Kritik işlemlerde Mert'ten onay al.
+- Aktif proje seçiliyse kısa ve bağlamsız konuşmalarda aktif projeyi varsayılan bağlam olarak kullan.
+- Aktif görev seçiliyse “devam et”, “başla”, “bunu hazırla”, “üret”, “yapalım” gibi komutlarda aktif görevi bağlam olarak kullan.
+- Aktif görev açıksa mümkünse doğrudan somut ilk çıktıyı üret.
+- Aktif görev tamamlandıysa yeni görev seçmeyi öner.
+- Mert kayıtlı çıktı, son taslak, hero metni veya kayıtlı metin sorarsa outputs verisini kullan.
+- Kayıtlı çıktıyı sorarsa yeniden uydurma; kayıtlı içeriği özetle veya aynen göster.
+- Öğrenilmiş tercihler varsa, içerik üretirken bunları marka profilinden daha güncel kabul et.
+- Aktif projeye bağlı tercihler genel tercihlerden daha önceliklidir.
+- Aktif göreve bağlı tercihler proje tercihlerinden daha önceliklidir.
+- Mert’i soru yağmuruna tutma; sadece gerçekten öğrenmeye değer yerde kısa soru sor.
+- Her şeyi baştan sabitlemeye çalışma; kervanı yolda düzme mantığıyla gerçek kullanımdan öğren.
 """
 
         conversation_text = build_conversation_text(
