@@ -19,6 +19,7 @@ venv/
 venv*/
 vex-backend/.venv*
 vex-backend/venv*
+vex-backend/.venvcd/
 
 # Python cache
 __pycache__/
