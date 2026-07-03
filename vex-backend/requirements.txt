@@ -11,7 +11,10 @@ pyautogui
 numpy
 sounddevice
 scipy
+faster-whisper
 beautifulsoup4
 lxml
 aiofiles
 python-dateutil
+psutil
+pynput

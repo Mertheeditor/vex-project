@@ -11,9 +11,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Python
+# Python virtual environments
 .venv/
 venv/
+*.venv/
+.venv*/
+venv*/
+vex-backend/.venv*
+vex-backend/venv*
+
+# Python cache
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -22,11 +29,12 @@ __pycache__/
 # Tauri / Rust
 target/
 src-tauri/target/
+vex-app/src-tauri/target/
 
 # OS
 .DS_Store
 
-# Logs / runtime
+# Logs / runtime files
 *.log
 logs/
 screenshots/
@@ -35,3 +43,9 @@ audio/
 uploads/
 downloads/
 models/
+vex-backend/screenshots/
+vex-backend/recordings/
+vex-backend/audio/
+vex-backend/uploads/
+vex-backend/downloads/
+vex-backend/models/
