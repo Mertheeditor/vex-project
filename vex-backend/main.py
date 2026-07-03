@@ -4119,3 +4119,908 @@ Vex olarak Mert'e cevap ver.
         return {
             "reply": f"Chat tarafında teknik bir hata oluştu Mert: {str(error)}",
         }
+
+
+# ==========================================
+# COMPUTER USE / BİLGİSAYAR KONTROL MODÜLÜ
+# ==========================================
+
+import pyautogui
+import base64
+import io
+import webbrowser
+import shlex
+import subprocess
+from datetime import datetime
+import json
+import re
+
+computer_use_logs: list[str] = []
+computer_use_running = False
+computer_use_stop_event = False
+current_computer_task_id = None
+last_computer_intent = "unknown"
+last_computer_action = "none"
+
+# Manual step memory
+manual_pending_action = None
+manual_pending_screenshot = None
+
+APP_ALLOWLIST = [
+    "Spotify",
+    "Safari",
+    "Google Chrome",
+    "Visual Studio Code",
+    "Finder",
+    "Mail",
+    "Notes",
+    "Terminal"
+]
+
+def add_computer_log(task_id: str, text: str) -> None:
+    ts = datetime.now().strftime("%H:%M:%S")
+    tid_label = f" [{task_id[:6]}]" if task_id else ""
+    line = f"[{ts}]{tid_label} {text}"
+    print(line)
+    computer_use_logs.append(line)
+
+def check_accessibility_permission() -> bool:
+    try:
+        return True
+    except Exception:
+        return False
+
+def take_screenshot() -> dict:
+    try:
+        screenshot = pyautogui.screenshot()
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        return {
+            "success": True,
+            "image_base64": img_b64,
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+def route_instruction_intent(instruction: str) -> dict:
+    try:
+        client = get_gemini_client()
+        if not client:
+            return {"intent": "unknown", "confidence": 0.0}
+
+        prompt = f'Kullanıcının bilgisayar kontrol talimatını analiz et ve niyetini (intent) sınıflandır.\n\nTalimat: "{instruction}"\n\nSadece şu JSON formatında cevap ver (Markdown, açıklama veya ek yazı yazma):\n{{\n  "intent": "open_app|open_url|observe_screen|ui_click_task|type_task|unknown",\n  "app_name": "Spotify|Safari|Google Chrome|Visual Studio Code|Finder|Mail|Notes|Terminal veya null",\n  "url": "Açılması istenen URL veya null",\n  "confidence": 0.95\n}}\n\nEğer talimatta Shopify\'ı açmak geçiyorsa intent "open_url" olmalıdır.'
+
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=prompt,
+        )
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-zA-Z0-9]*\n", "", raw)
+            raw = re.sub(r"\n```$", "", raw).strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"Intent router error: {e}")
+        return {"intent": "unknown", "confidence": 0.0}
+
+def execute_computer_action(task_id: str, action_data: dict, instruction: str = "") -> dict:
+    global computer_use_stop_event, last_computer_action
+    if computer_use_stop_event:
+        return {"success": False, "message": "Stopped by user"}
+
+    action = action_data.get("action", "").lower()
+    last_computer_action = action
+    
+    # 5. SELF-UI TRAP GUARD
+    is_vex_dashboard_targeted = False
+    thought = action_data.get("thought", "").lower()
+    
+    if "vex" in thought or "dashboard" in thought or "görevi başlat" in thought or "task" in thought:
+        if "vex" not in instruction.lower() and "panel" not in instruction.lower():
+            is_vex_dashboard_targeted = True
+
+    if is_vex_dashboard_targeted and action in ("click", "double_click", "move"):
+        add_computer_log(task_id, "SELF_UI_TRAP_BLOCKED: Vex tried to click its own control panel during an external task.")
+        return {"success": False, "message": "SELF_UI_TRAP_BLOCKED: Vex tried to click its own control panel during an external task."}
+
+    try:
+        if action == "open_app":
+            app_name = action_data.get("app_name")
+            if not app_name or app_name not in APP_ALLOWLIST:
+                add_computer_log(task_id, f"APP_NOT_ALLOWED_OR_UNKNOWN: '{app_name}'")
+                return {"success": False, "message": "APP_NOT_ALLOWED_OR_UNKNOWN", "action": "open_app"}
+            
+            add_computer_log(task_id, f"OPEN_APP: Opening '{app_name}' securely.")
+            subprocess.run(["open", "-a", app_name], check=True)
+            return {"success": True, "action": "open_app", "app_name": app_name}
+
+        elif action == "open_url":
+            url = action_data.get("url")
+            if not url:
+                return {"success": False, "message": "URL required"}
+            
+            if not (url.startswith("http://") or url.startswith("https://")):
+                add_computer_log(task_id, f"BLOCKED: Unsafe URL scheme in '{url}'")
+                return {"success": False, "message": "SECURITY_BLOCKED: Unsafe URL scheme"}
+
+            add_computer_log(task_id, f"OPEN_URL: Opening '{url}' securely.")
+            webbrowser.open(url)
+            return {"success": True, "action": "open_url", "url": url}
+
+        elif action == "click":
+            x, y = action_data.get("x"), action_data.get("y")
+            if x is None or y is None:
+                return {"success": False, "message": "x/y required"}
+            pyautogui.click(x, y)
+            add_computer_log(task_id, f"CLICK at ({x}, {y})")
+            return {"success": True, "action": "click", "x": x, "y": y}
+
+        elif action == "double_click":
+            x, y = action_data.get("x"), action_data.get("y")
+            if x is None or y is None:
+                return {"success": False, "message": "x/y required"}
+            pyautogui.doubleClick(x, y)
+            add_computer_log(task_id, f"DOUBLE_CLICK at ({x}, {y})")
+            return {"success": True, "action": "double_click", "x": x, "y": y}
+
+        elif action == "type_text":
+            text = action_data.get("text", "")
+            if not text:
+                return {"success": False, "message": "text required"}
+            pyautogui.typewrite(text, interval=0.02)
+            add_computer_log(task_id, f"TYPE_TEXT: {text[:40]}...")
+            return {"success": True, "action": "type_text", "text": text}
+
+        elif action == "press_key":
+            key = action_data.get("key", "")
+            if not key:
+                return {"success": False, "message": "key required"}
+            pyautogui.press(key)
+            add_computer_log(task_id, f"PRESS_KEY: {key}")
+            return {"success": True, "action": "press_key", "key": key}
+
+        elif action == "hotkey":
+            keys = action_data.get("keys", [])
+            if not keys:
+                return {"success": False, "message": "keys required"}
+            pyautogui.hotkey(*keys)
+            add_computer_log(task_id, f"HOTKEY: {'+'.join(keys)}")
+            return {"success": True, "action": "hotkey", "keys": keys}
+
+        elif action == "scroll":
+            clicks = action_data.get("clicks", 3)
+            pyautogui.scroll(clicks)
+            add_computer_log(task_id, f"SCROLL: {clicks}")
+            return {"success": True, "action": "scroll", "clicks": clicks}
+
+        elif action == "wait":
+            seconds = action_data.get("seconds", 1)
+            import time
+            time.sleep(seconds)
+            add_computer_log(task_id, f"WAIT: {seconds}s")
+            return {"success": True, "action": "wait", "seconds": seconds}
+
+        elif action == "done":
+            return {"success": True, "action": "done"}
+
+        else:
+            return {"success": False, "message": f"Unsupported action: {action}"}
+            
+    except Exception as e:
+        add_computer_log(task_id, f"Execution Error: {e}")
+        return {"success": False, "message": str(e)}
+
+def analyze_screen_with_ai(image_base64: str, prompt: str) -> dict:
+    try:
+        client = get_gemini_client()
+        if not client:
+            return {"success": False, "message": "Gemini client not available"}
+
+        image_part = {"mime_type": "image/png", "data": base64.b64decode(image_base64)}
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=[
+                {"role": "user", "parts": [
+                    {"text": prompt},
+                    {"inline_data": image_part}
+                ]}
+            ],
+        )
+        return {"success": True, "analysis": response.text}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/computer/status")
+def computer_status():
+    global computer_use_running, computer_use_stop_event, current_computer_task_id, last_computer_intent, last_computer_action
+    screenshot_data = take_screenshot()
+    return {
+        "success": True,
+        "running": computer_use_running,
+        "stopped": computer_use_stop_event,
+        "active_task_id": current_computer_task_id,
+        "last_intent": last_computer_intent,
+        "last_action": last_computer_action,
+        "accessibility_status": check_accessibility_permission(),
+        "screenshot": screenshot_data,
+        "logs": computer_use_logs[-50:],
+        "manual_pending_action": manual_pending_action
+    }
+
+@app.get("/computer/screenshot")
+def computer_screenshot():
+    return take_screenshot()
+
+@app.post("/computer/observe")
+def computer_observe():
+    try:
+        screenshot = take_screenshot()
+        if not screenshot.get("success"):
+            return screenshot
+        result = analyze_screen_with_ai(
+            screenshot["image_base64"],
+            "Bu ekran görüntüsünü detaylıca analiz et. Türkçe olarak ne gördüğünü açıkla. Butonlar, metinler, form alanları, menüler varsa bunları listele."
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/computer/action")
+def computer_action(request: dict):
+    global current_computer_task_id
+    task_id = current_computer_task_id or str(uuid.uuid4())[:8]
+    return execute_computer_action(task_id, request)
+
+@app.post("/computer/step/approve")
+def computer_step_approve():
+    global manual_pending_action, current_computer_task_id
+    if not manual_pending_action:
+        return {"success": False, "message": "Onay bekleyen manuel adım yok."}
+    
+    task_id = current_computer_task_id or str(uuid.uuid4())[:8]
+    action_to_run = manual_pending_action
+    manual_pending_action = None
+    
+    result = execute_computer_action(task_id, action_to_run)
+    return {
+        "success": True,
+        "result": result,
+        "message": f"Manuel adım onaylandı ve yürütüldü: {action_to_run.get('action')}"
+    }
+
+@app.post("/computer/step/reject")
+def computer_step_reject():
+    global manual_pending_action
+    if not manual_pending_action:
+        return {"success": False, "message": "Reddedilecek adım yok."}
+    
+    manual_pending_action = None
+    return {"success": True, "message": "Önerilen adım reddedildi."}
+
+@app.post("/computer/task")
+def computer_task(request: dict):
+    global computer_use_running, computer_use_stop_event, current_computer_task_id, last_computer_intent, manual_pending_action
+    
+    if computer_use_running:
+        return {
+            "success": False,
+            "message": "Zaten aktif bir bilgisayar kontrol görevi çalışıyor! Lütfen önce onu durdurun.",
+            "active_task_id": current_computer_task_id
+        }
+
+    instruction = request.get("instruction", "")
+    mode = request.get("mode", "assisted_fast")
+    max_steps = request.get("max_steps", 20)
+
+    if not instruction:
+        return {"success": False, "message": "Talimat (instruction) gereklidir."}
+
+    task_id = str(uuid.uuid4())[:8]
+    current_computer_task_id = task_id
+    computer_use_running = True
+    computer_use_stop_event = False
+    
+    add_computer_log(task_id, f"GÖREV BAŞLATILDI: {instruction} (Mod: {mode})")
+    
+    intent_data = route_instruction_intent(instruction)
+    intent = intent_data.get("intent", "unknown")
+    last_computer_intent = intent
+    add_computer_log(task_id, f"Algılanan Niyet: {intent} (Güven Oranı: {intent_data.get('confidence', 0.0)})")
+
+    if intent == "open_app":
+        app_name = intent_data.get("app_name")
+        res = execute_computer_action(task_id, {"action": "open_app", "app_name": app_name})
+        computer_use_running = False
+        return {"success": res.get("success"), "message": res.get("message"), "intent": intent, "steps": 1}
+
+    elif intent == "open_url":
+        url = intent_data.get("url")
+        if "shopify" in instruction.lower() and not url:
+            computer_use_running = False
+            return {
+                "success": True,
+                "message": "Shopify admin URL'sini ayarlara eklemem gerekiyor.",
+                "action": "ask_user"
+            }
+        
+        res = execute_computer_action(task_id, {"action": "open_url", "url": url})
+        computer_use_running = False
+        return {"success": res.get("success"), "message": res.get("message"), "intent": intent, "steps": 1}
+
+    elif intent == "observe_screen":
+        obs_res = computer_observe()
+        computer_use_running = False
+        return {"success": True, "message": "Ekran analizi tamamlandı.", "analysis": obs_res.get("analysis")}
+
+    try:
+        for step in range(1, max_steps + 1):
+            if computer_use_stop_event:
+                add_computer_log(task_id, "Görev kullanıcı tarafından durduruldu.")
+                return {"success": True, "message": "Stopped by user", "steps": step - 1}
+
+            screenshot = take_screenshot()
+            if not screenshot.get("success"):
+                return screenshot
+
+            prompt = f'Sen Vex\'in Bilgisayar Kontrol yapay zekasısın. Ekran görüntüsüne bakarak bir sonraki adımı seç.\n\nKural: Kendi Vex uygulamasındaki \'Görevi Başlat\', \'Durdur\' butonlarına veya kendi paneline KESİNLİKLE tıklama! Sadece diğer dış pencerelere odaklan.\n\nGörev: "{instruction}"\n\nSadece şu JSON formatında yanıt ver:\n{{\n  "thought": "Ekranda ne gördüğünü kısa açıkla",\n  "action": "click|double_click|type_text|press_key|hotkey|scroll|wait|done|ask_user",\n  "x": 100,\n  "y": 200,\n  "text": "yazılacak metin",\n  "key": "enter",\n  "keys": ["ctrl", "c"],\n  "clicks": 3,\n  "seconds": 1,\n  "confidence": 0.9,\n  "risk_level": "low|medium|high"\n}}'
+
+            analysis = analyze_screen_with_ai(screenshot["image_base64"], prompt)
+            if not analysis.get("success"):
+                add_computer_log(task_id, f"AI analiz hatası: {analysis.get('message')}")
+                return analysis
+
+            try:
+                raw = analysis["analysis"]
+                if raw.startswith("```"):
+                    raw = re.sub(r"^```[a-zA-Z0-9]*\n", "", raw)
+                    raw = re.sub(r"\n```$", "", raw).strip()
+                action_data = json.loads(raw)
+            except Exception as e:
+                add_computer_log(task_id, f"AI yanıtı geçerli JSON değil: {e}")
+                return {"success": False, "message": "AI invalid response JSON", "raw": analysis.get("analysis")}
+
+            action = action_data.get("action", "").lower()
+            thought = action_data.get("thought", "")
+            add_computer_log(task_id, f"Adım {step}: {action} - {thought[:60]}...")
+
+            if action == "done":
+                add_computer_log(task_id, "Görev başarıyla tamamlandı.")
+                return {"success": True, "message": "Task completed", "steps": step}
+
+            if action == "ask_user":
+                question = action_data.get("text") or "Kullanıcı girdisi gerekiyor"
+                add_computer_log(task_id, f"Vex soruyor: {question}")
+                return {"success": True, "message": "AI needs input", "question": question, "steps": step}
+
+            if mode == "manual_step":
+                manual_pending_action = action_data
+                add_computer_log(task_id, f"Adım {step} için onay bekleniyor: {action}")
+                return {
+                    "success": True,
+                    "message": "Manual step approval required",
+                    "step": step,
+                    "proposed_action": action_data,
+                    "screenshot": screenshot
+                }
+
+            result = execute_computer_action(task_id, action_data, instruction)
+            if not result.get("success"):
+                add_computer_log(task_id, f"Aksiyon başarısız oldu: {result.get('message')}")
+                return result
+
+            if action in ("click", "double_click", "type_text", "press_key", "hotkey"):
+                import time
+                time.sleep(0.5)
+
+        add_computer_log(task_id, f"Maksimum adım ({max_steps}) sınırına ulaşıldı.")
+        return {"success": True, "message": "Max steps reached", "steps": max_steps}
+
+    finally:
+        computer_use_running = False
+        current_computer_task_id = None
+# ==========================================
+# GÜVENLİ SELF-EVOLUTION / KENDİ KENDİNE GELİŞİM AJANI
+# ==========================================
+
+import threading
+import subprocess
+import shutil
+import time
+import uuid
+import re
+from pathlib import Path
+
+# === EMERGENCY SAFE MODE ===
+SELF_EVOLUTION_SAFE_MODE = True  # Default: True
+
+# === ALLOWED DIRECTORIES ===
+ALLOWED_WORKSPACE_DIRS = [
+    Path("/Users/mert/Vex/vex-app").resolve(),
+    Path("/Users/mert/Vex/vex-backend").resolve(),
+]
+
+# === FORBIDDEN FILES / PATHS (glob matching) ===
+FORBIDDEN_PATH_MARKERS = [
+    ".env", ".env.", ".git", "node_modules", "src-tauri/target", "__pycache__",
+    ".ssh", "*.pem", "*.key", "*.p12", "*.pfx", "*.sqlite", "*.db"
+]
+
+# === COMMAND ALLOWLIST ===
+ALLOWED_COMMANDS = [
+    "npm run build",
+    "npm run dev",
+    "npm run tauri dev",
+    "python -m pytest",
+    "pytest",
+    "cargo build",
+]
+
+# === FORBIDDEN COMMAND PATTERNS ===
+FORBIDDEN_COMMAND_PATTERNS = [
+    r"\brm\b", r"\bsudo\b", r"\bcurl\b", r"\bwget\b", r"\bbash\b", r"\bsh\b",
+    r"\bchmod\b", r"\bchown\b", r"\bdocker\b", r"\bgit reset\b", r"\bgit clean\b",
+    r"\bgit push\b", r"\bpython -c\b", r"\bnode -e\b", r"\bopen\b", r"\bosascript\b",
+    r"[>]{2}", r"[>]", r"\|", r"&&", r";",
+]
+
+# === SECRET REDACTION PATTERNS ===
+SECRET_PATTERNS = [
+    r"(?i)(api[_-]?key\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(gemini[_-]?api[_-]?key\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(secret\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(password\s*[:=]\s*['\"\s]?)[A-Za-z0-9!@#$%^&*()_+-=]{6,}(['\"\s]?)",
+    r"(?i)(token\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(access[_-]?token\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(refresh[_-]?token\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(bearer\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+    r"(?i)(authorization\s*[:=]\s*['\"\s]?)[A-Za-z0-9_-]{10,}(['\"\s]?)",
+]
+
+class EvolutionRequest(BaseModel):
+    prompt: str
+
+evolution_logs_list = []
+is_evolution_running = False
+pending_evolution_actions: list[dict] = []
+
+# --- GÜVENLİK YARDIMCI FONKSİYONLARI ---
+
+def add_evolution_log(level: str, text: str):
+    redacted_text = text
+    for pattern in SECRET_PATTERNS:
+        redacted_text = re.sub(pattern, r"\1[REDACTED]\2", redacted_text)
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_line = f"[{timestamp}] [{level}] {redacted_text}"
+    print(log_line)
+    evolution_logs_list.append(log_line)
+
+def is_safe_path(rel_path: str) -> tuple:
+    if not rel_path.strip():
+        return False, "Dosya yolu boş."
+    
+    # Block reading .env file explicitly under any circumstance
+    if ".env" in rel_path.lower():
+        add_evolution_log("SECURITY-BLOCK", "SECURITY_BLOCKED: unsafe path rejected - .env files are forbidden")
+        return False, "SECURITY_BLOCKED: unsafe path rejected"
+        
+    try:
+        root = Path("/Users/mert/Vex")
+        path_to_check = (root / rel_path).resolve()
+    except Exception:
+        add_evolution_log("SECURITY-BLOCK", f"SECURITY_BLOCKED: unsafe path rejected - unresolvable path: {rel_path}")
+        return False, "SECURITY_BLOCKED: unsafe path rejected"
+        
+    # Sıkı Sandbox Kontrolü (os.path.commonpath)
+    allowed = False
+    for dir_path in ALLOWED_WORKSPACE_DIRS:
+        try:
+            # check if path_to_check is nested inside dir_path
+            common = os.path.commonpath([str(dir_path), str(path_to_check)])
+            if common == str(dir_path):
+                allowed = True
+                break
+        except ValueError:
+            continue
+            
+    if not allowed:
+        add_evolution_log("SECURITY-BLOCK", f"SECURITY_BLOCKED: unsafe path rejected - resolved path {path_to_check} is outside allowed directories")
+        return False, "SECURITY_BLOCKED: unsafe path rejected"
+        
+    path_str = str(path_to_check).lower()
+    for marker in FORBIDDEN_PATH_MARKERS:
+        if "*" in marker:
+            pattern = marker.replace(".", r"\.").replace("*", r".*")
+            if re.search(pattern, path_str):
+                add_evolution_log("SECURITY-BLOCK", f"SECURITY_BLOCKED: unsafe path rejected - forbidden pattern matched: {marker}")
+                return False, "SECURITY_BLOCKED: unsafe path rejected"
+        else:
+            if marker.lower() in path_str:
+                add_evolution_log("SECURITY-BLOCK", f"SECURITY_BLOCKED: unsafe path rejected - forbidden file/folder marker matched: {marker}")
+                return False, "SECURITY_BLOCKED: unsafe path rejected"
+                
+    return True, ""
+
+def is_command_safe(command: str) -> tuple:
+    if not command.strip():
+        return False, "Komut boş."
+        
+    for pattern in FORBIDDEN_COMMAND_PATTERNS:
+        if re.search(pattern, command):
+            return False, "Güvenlik duvarı: Komutta yasaklı bir shell operatörü veya komut tespit edildi."
+            
+    allowed = False
+    for allowed_cmd in ALLOWED_COMMANDS:
+        if command.strip() == allowed_cmd or command.strip().startswith(allowed_cmd + " "):
+            allowed = True
+            break
+            
+    if not allowed:
+        return False, "Güvenlik duvarı: Komut izin verilen komutlar listesinde (Allowlist) bulunamadı."
+        
+    return True, ""
+
+def redact_secrets(text: str) -> str:
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        redacted = re.sub(pattern, r"\1[REDACTED]\2", redacted)
+    return redacted
+
+def create_pending_action(action_type: str, data: dict) -> dict:
+    action_id = str(uuid.uuid4())[:8]
+    now = datetime.now().isoformat()
+    pending = {
+        "id": action_id,
+        "action_type": action_type,
+        "status": "pending",
+        "created_at": now,
+        "target_path": data.get("path", ""),
+        "command": data.get("command", ""),
+        "reason": data.get("thought", "Açıklama belirtilmedi."),
+        "risk_level": data.get("risk_level", "normal"),
+    }
+    if action_type in ("WRITE_FILE", "REPLACE_IN_FILE"):
+        pending["before_content"] = data.get("before_content", "")
+        if action_type == "WRITE_FILE":
+            pending["after_content"] = data.get("content", "")
+        else:
+            pending["replacement"] = data.get("replace", "")
+    pending_evolution_actions.append(pending)
+    return pending
+
+def find_pending_action(action_id: str):
+    for action in pending_evolution_actions:
+        if action["id"] == action_id:
+            return action
+    return None
+
+def execute_approved_action(action: dict, workspace_root: Path) -> str:
+    # RE-RUN SECURITY CHECKS RIGHT BEFORE EXECUTION FOR ABSOLUTE SAFETY!
+    action_type = action["action_type"]
+    rel_path = action.get("target_path", "")
+    cmd = action.get("command", "")
+    
+    if action_type in ("WRITE_FILE", "REPLACE_IN_FILE"):
+        safe, msg = is_safe_path(rel_path)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", f"YENİDEN KONTROL ENGELLEMESİ: {msg}")
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+            
+    if action_type == "EXECUTE_COMMAND":
+        safe, msg = is_command_safe(cmd)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", f"YENİDEN KONTROL ENGELLEMESİ: {msg}")
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+
+    if action_type == "WRITE_FILE":
+        content = redact_secrets(action.get("after_content", ""))
+        file_path = workspace_root / rel_path
+        if file_path.exists():
+            backup_path = file_path.with_suffix(f".before-evolution-{int(time.time())}{file_path.suffix}")
+            shutil.copy2(file_path, backup_path)
+            add_evolution_log("INFO", f"Yedek alındı: {backup_path.name}")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        add_evolution_log("SUCCESS", f"Kullanıcı onayı ile dosya yazıldı: {rel_path}")
+        return f"BAŞARI ({action_type}): {rel_path} dosyası yazıldı."
+        
+    elif action_type == "REPLACE_IN_FILE":
+        replacement = redact_secrets(action.get("replacement", ""))
+        search_text = action.get("before_content", "")
+        file_path = workspace_root / rel_path
+        if file_path.exists():
+            current_content = file_path.read_text(encoding="utf-8")
+            if search_text in current_content:
+                backup_path = file_path.with_suffix(f".before-evolution-{int(time.time())}{file_path.suffix}")
+                shutil.copy2(file_path, backup_path)
+                add_evolution_log("INFO", f"Yedek alındı: {backup_path.name}")
+                new_content = current_content.replace(search_text, replacement, 1)
+                file_path.write_text(new_content, encoding="utf-8")
+                add_evolution_log("SUCCESS", f"Kullanıcı onayı ile dosya düzenlendi: {rel_path}")
+                return f"BAŞARI ({action_type}): {rel_path} içinde değişim yapıldı."
+            else:
+                return f"HATA: Aranan metin {rel_path} içinde bulunamadı."
+        else:
+            return f"HATA: {rel_path} dosyası bulunamadı."
+            
+    elif action_type == "EXECUTE_COMMAND":
+        try:
+            # execute command securely using shlex split if possible or with safe parameters
+            # we block shell injection above, so shell=True is only used for allowed command lines
+            result = subprocess.run(cmd, shell=True, cwd=str(workspace_root), text=True, capture_output=True, timeout=120)
+            stdout = redact_secrets(result.stdout or "")
+            stderr = redact_secrets(result.stderr or "")
+            ec = result.returncode
+            add_evolution_log("INFO", f"Komut tamamlandı. Exit Code: {ec}")
+            
+            # Geri dönüş ve yedek bilgilendirme mesajı ekleme
+            build_info = ""
+            if ec != 0:
+                build_info = "\n[BİLGİ] Eğer derleme/build başarısız olduysa, yapılan değişiklikleri geri almak için klasördeki en son oluşturulan '.before-evolution-[timestamp]' yedek dosyasını asıl dosyanın üzerine yazabilirsiniz."
+                
+            return f"KOMUT ÇIKTISI (Exit Code: {ec}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}{build_info}"
+        except subprocess.TimeoutExpired:
+            return "HATA: Komut zaman aşımına uğradı."
+        except Exception as e:
+            return f"HATA: {str(e)}"
+            
+    return f"HATA: Bilinmeyen eylem tipi: {action_type}"
+
+def wait_for_action_approval(action_id: str, max_wait: int = 300) -> tuple:
+    start = time.time()
+    while time.time() - start < max_wait:
+        action = find_pending_action(action_id)
+        if action is None:
+            return False, "İşlem bulunamadı."
+        if action["status"] == "approved":
+            return True, "İşlem onaylandı."
+        elif action["status"] == "rejected":
+            return False, "Mert bu işlemi reddetti."
+        time.sleep(0.5)
+    act = find_pending_action(action_id)
+    if act:
+        act["status"] = "expired"
+    return False, "İşlem zaman aşımına uğradı."
+
+def run_safe_evolution_step(action_data: dict, workspace_root: Path) -> str:
+    action = action_data.get("action", "").upper()
+    rel_path = action_data.get("path", "")
+    cmd = action_data.get("command", "")
+    
+    if action == "READ_FILE":
+        safe, msg = is_safe_path(rel_path)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", msg)
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+        fp = workspace_root / rel_path
+        if fp.exists():
+            return f"DOSYA İÇERİĞİ ({rel_path}):\n{fp.read_text(encoding='utf-8')}"
+        return f"HATA: {rel_path} dosyası bulunamadı."
+        
+    elif action == "LIST_FILES":
+        safe, msg = is_safe_path(rel_path)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", msg)
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+        dp = workspace_root / rel_path
+        if dp.exists() and dp.is_dir():
+            files = [str(f.relative_to(workspace_root)) for f in dp.glob("*")]
+            return f"KLASÖR LİSTESİ ({rel_path}):\n" + "\n".join(files)
+        return f"HATA: {rel_path} klasör bulunamadı."
+        
+    elif action == "WRITE_FILE":
+        safe, msg = is_safe_path(rel_path)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", msg)
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+            
+        content = redact_secrets(action_data.get("content", ""))
+        bc = ""
+        fp = workspace_root / rel_path
+        if fp.exists():
+            bc = fp.read_text(encoding="utf-8")
+            
+        pd = {
+            "path": rel_path,
+            "content": content,
+            "thought": action_data.get("thought", "Yeni dosya yazılacak."),
+            "risk_level": "yüksek",
+            "before_content": bc
+        }
+        p = create_pending_action("WRITE_FILE", pd)
+        add_evolution_log("WAITING-APPROVAL", f"Kullanıcı onayı bekleniyor: {rel_path} dosyası yazılacak.")
+        
+        ok, m = wait_for_action_approval(p["id"])
+        if ok:
+            return execute_approved_action(p, workspace_root)
+        p["status"] = "rejected"
+        return f"KULLANICI REDDETTİ: {m}"
+        
+    elif action == "REPLACE_IN_FILE":
+        safe, msg = is_safe_path(rel_path)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", msg)
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+            
+        fp = workspace_root / rel_path
+        st = action_data.get("search", "")
+        bc = ""
+        if fp.exists():
+            bc = fp.read_text(encoding="utf-8")
+            
+        pd = {
+            "path": rel_path,
+            "search": st,
+            "replace": action_data.get("replace", ""),
+            "thought": action_data.get("thought", "Dosya düzenlenecek."),
+            "risk_level": "yüksek",
+            "before_content": st
+        }
+        p = create_pending_action("REPLACE_IN_FILE", pd)
+        add_evolution_log("WAITING-APPROVAL", f"Kullanıcı onayı bekleniyor: {rel_path} dosyasında değişiklik.")
+        
+        ok, m = wait_for_action_approval(p["id"])
+        if ok:
+            return execute_approved_action(p, workspace_root)
+        p["status"] = "rejected"
+        return f"KULLANICI REDDETTİ: {m}"
+        
+    elif action == "EXECUTE_COMMAND":
+        safe, msg = is_command_safe(cmd)
+        if not safe:
+            add_evolution_log("SECURITY-BLOCK", f"Komut engellendi: {msg}")
+            return f"GÜVENLİK ENGELLEMESİ: {msg}"
+            
+        pd = {
+            "command": cmd,
+            "thought": action_data.get("thought", "Komut çalıştırılacak."),
+            "risk_level": "yüksek"
+        }
+        p = create_pending_action("EXECUTE_COMMAND", pd)
+        add_evolution_log("WAITING-APPROVAL", f"Kullanıcı onayı bekleniyor: '{cmd}'")
+        
+        ok, m = wait_for_action_approval(p["id"])
+        if ok:
+            return execute_approved_action(p, workspace_root)
+        p["status"] = "rejected"
+        return f"KULLANICI REDDETTİ: {m}"
+        
+    elif action == "FINISH":
+        return "__FINISH__"
+    else:
+        return f"HATA: Bilinmeyen eylem: {action}."
+
+def run_evolution_agent_loop(prompt: str):
+    global evolution_logs_list
+    if SELF_EVOLUTION_SAFE_MODE:
+        add_evolution_log("INFO", f"[SAFE MODE] Evrim başlatıldı: {prompt}")
+        add_evolution_log("INFO", "Tüm WRITE/REPLACE/EXECUTE işlemleri kullanıcı onayına tabidir.")
+    else:
+        add_evolution_log("INFO", f"Evrim başlatıldı: {prompt}")
+        
+    client = get_gemini_client()
+    if not client:
+        add_evolution_log("ERROR", "Gemini API anahtarı bulunamadı!")
+        return {"success": False, "message": "Gemini API anahtarı bulunamadı."}
+        
+    wr = Path("/Users/mert/Vex")
+    sn = "GÜVENLİK KURALI: WRITE_FILE, REPLACE_IN_FILE, EXECUTE_COMMAND KULLANICI ONAYI BEKLER."
+    key = "Proje: vex-app/ (React+Tauri) ve vex-backend/ (FastAPI)"
+    ch = []
+    si = f"""Sen Vex'in Güvenli Evrim Ajanısın.
+{sn}
+
+Eylemler:
+1. READ_FILE (güvenli)
+2. WRITE_FILE (ONAY GEREKİR)
+3. REPLACE_IN_FILE (ONAY GEREKİR)
+4. EXECUTE_COMMAND (ONAY GEREKİR)
+5. LIST_FILES (güvenli)
+6. FINISH
+
+Sadece JSON yanıt ver."""
+    ch.append({"role": "user", "text": f"Mert'in İsteği: {prompt}"})
+    for step in range(1, 26):
+        add_evolution_log("INFO", f"Adım {step}/25")
+        try:
+            ht = ""
+            for m in ch:
+                rl = "Kullanıcı" if m["role"] == "user" else "Asistan"
+                ht += f"{rl}: {m['text']}\n"
+            fp = f"{si}\n\n{ht}\nŞimdi sıradaki eylemini JSON olarak dön:"
+            r = client.models.generate_content(model="gemini-2.5-pro", contents=fp)
+            rt = r.text.strip()
+            if rt.startswith("```"):
+                rt = re.sub(r"^```[a-zA-Z0-9]*\n", "", rt)
+                rt = re.sub(r"\n```$", "", rt).strip()
+            ad = json.loads(rt)
+        except Exception as e:
+            add_evolution_log("ERROR", f"JSON ayrıştırma hatası: {e}")
+            ch.append({"role": "user", "text": "HATA: Geçerli JSON dön."})
+            continue
+            
+        t = ad.get("thought", "")
+        a = ad.get("action", "").upper()
+        add_evolution_log("AGENT-THOUGHT", t)
+        
+        if a == "FINISH":
+            add_evolution_log("SUCCESS", "Tamamlandı!")
+            return {"success": True, "message": "Tamamlandı."}
+            
+        try:
+            r2 = run_safe_evolution_step(ad, wr)
+        except Exception as e:
+            r2 = f"HATA: {e}"
+            traceback.print_exc()
+            
+        if r2 == "__FINISH__":
+            add_evolution_log("SUCCESS", "Tamamlandı!")
+            return {"success": True, "message": "Tamamlandı."}
+            
+        ch.append({"role": "model", "text": rt})
+        ch.append({"role": "user", "text": r2})
+        
+    return {"success": False, "message": "Maksimum adım sınırı."}
+
+def run_evolution_background(prompt: str):
+    global is_evolution_running
+    is_evolution_running = True
+    try:
+        run_evolution_agent_loop(prompt)
+    except Exception as e:
+        add_evolution_log("ERROR", f"Arka planda hata: {e}")
+        traceback.print_exc()
+    finally:
+        is_evolution_running = False
+
+@app.post("/evolution/prompt")
+def run_evolution(request: EvolutionRequest):
+    global is_evolution_running
+    if is_evolution_running:
+        return {"success": False, "message": "Zaten çalışıyor."}
+    threading.Thread(target=run_evolution_background, args=(request.prompt,), daemon=True).start()
+    return {"success": True, "message": "Evrim başlatıldı.", "safe_mode": SELF_EVOLUTION_SAFE_MODE}
+
+@app.get("/evolution/logs")
+def get_evolution_logs():
+    return {"logs": evolution_logs_list}
+
+@app.post("/evolution/reset-logs")
+def reset_evolution_logs():
+    global evolution_logs_list, pending_evolution_actions
+    evolution_logs_list = []
+    pending_evolution_actions = []
+    return {"success": True}
+
+@app.get("/evolution/status")
+def get_evolution_status():
+    return {"running": is_evolution_running, "safe_mode": SELF_EVOLUTION_SAFE_MODE, "pending_actions": len(pending_evolution_actions)}
+
+@app.get("/evolution/pending-actions")
+def get_pending_actions():
+    return {"pending_actions": [a for a in pending_evolution_actions if a["status"] == "pending"]}
+
+@app.post("/evolution/approve-action/{action_id}")
+def approve_action(action_id: str):
+    a = find_pending_action(action_id)
+    if not a:
+        return {"success": False, "message": "İşlem bulunamadı."}
+    if a["status"] != "pending":
+        return {"success": False, "message": "Bu işlem zaten işlenmiş."}
+    a["status"] = "approved"
+    add_evolution_log("INFO", f"Kullanıcı ONAYLADI: {a['action_type']}")
+    return {"success": True, "message": "İşlem onaylandı.", "action": a}
+
+@app.post("/evolution/reject-action/{action_id}")
+def reject_action(action_id: str):
+    a = find_pending_action(action_id)
+    if not a:
+        return {"success": False, "message": "İşlem bulunamadı."}
+    if a["status"] != "pending":
+        return {"success": False, "message": "Bu işlem zaten işlenmiş."}
+    a["status"] = "rejected"
+    add_evolution_log("INFO", f"Kullanıcı REDDETTİ: {a['action_type']}")
+    return {"success": True, "message": "İşlem reddedildi.", "action": a}

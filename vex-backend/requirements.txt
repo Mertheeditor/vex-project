@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+requests
+python-dotenv
+google-genai
+python-multipart
+pydantic
+pillow
+mss
+pyautogui
+numpy
+sounddevice
+scipy
+beautifulsoup4
+lxml
+aiofiles
+python-dateutil

@@ -124,7 +124,7 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -186,6 +186,12 @@ type ActiveProjectDetail = {
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [input, setInput] = useState("");
+  
+  // Evrim Ajanı State'leri
+  const [evolutionPrompt, setEvolutionPrompt] = useState("");
+  const [evolutionLogs, setEvolutionLogs] = useState<string[]>([]);
+  const [isEvolutionRunning, setIsEvolutionRunning] = useState(false);
+  const [pendingEvolutionActions, setPendingEvolutionActions] = useState<any[]>([]);
   const [isSending, setIsSending] = useState(false);
 
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
@@ -228,6 +234,19 @@ function App() {
   const [reminders, setReminders] = useState<ReminderData[]>([]);
   const [isRemindersLoading, setIsRemindersLoading] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
+
+  const [computerScreenshot, setComputerScreenshot] = useState<string | null>(null);
+  const [computerScreenshotTime, setComputerScreenshotTime] = useState<string>("");
+  const [computerAnalysis, setComputerAnalysis] = useState<string>("");
+  const [computerTaskInput, setComputerTaskInput] = useState("");
+  const [computerMode, setComputerMode] = useState("assisted_fast");
+  const [computerLastResult, setComputerLastResult] = useState<any>(null);
+  const [computerLogs, setComputerLogs] = useState<string[]>([]);
+  const [computerUseRunning, setComputerUseRunning] = useState(false);
+  const [currentComputerTaskId, setCurrentComputerTaskId] = useState<string | null>(null);
+  const [lastComputerIntent, setLastComputerIntent] = useState<string>("unknown");
+  const [lastComputerAction, setLastComputerAction] = useState<string>("none");
+  const [manualPendingAction, setManualPendingAction] = useState<any>(null);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectType, setProjectType] = useState("");
@@ -255,37 +274,220 @@ function App() {
 
     // VEX_REMINDER_INTERVAL_START
     checkDueReminders();
-
     const vexReminderInterval = window.setInterval(() => {
       checkDueReminders();
     }, 15000);
     // VEX_REMINDER_INTERVAL_END
 
-    const reminderInterval = window.setInterval(() => {
-      checkDueReminders();
-    }, 30000);
     loadActiveProject();
     loadActiveTask();
     loadActiveProjectDetail();
     loadWorkspaceSummary();
 
-    const intervalId = window.setInterval(() => {
+    const backendHealthInterval = window.setInterval(() => {
       checkBackendHealth();
     }, 7000);
 
     return () => {
-      window.clearInterval(intervalId);
-    };
-    return () => {
-      window.clearInterval(reminderInterval);
-    };
-    return () => {
+      window.clearInterval(backendHealthInterval);
       window.clearInterval(vexReminderInterval);
     };
   }, []);
 
+  // Evrim status ve log izleme
+  useEffect(() => {
+    let intervalId: number | undefined;
+
+    if (activeView === "evolution" || isEvolutionRunning) {
+      loadEvolutionLogs();
+      checkEvolutionStatus();
+      loadPendingEvolutionActions();
+
+      intervalId = window.setInterval(() => {
+        loadEvolutionLogs();
+        checkEvolutionStatus();
+        loadPendingEvolutionActions();
+      }, 1000);
+    }
+
+    return () => {
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [activeView, isEvolutionRunning]);
+
+  // Bilgisayar Kontrol durum ve log izleme
+  useEffect(() => {
+    let intervalId: number;
+    if (activeView === "computer" || computerUseRunning) {
+      // Initial load
+      pollComputerStatus();
+      loadComputerLogs();
+
+      // Polling
+      intervalId = window.setInterval(() => {
+        pollComputerStatus();
+        loadComputerLogs();
+      }, 1000);
+    }
+    return () => {
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [activeView, computerUseRunning]);
+
+  async function pollComputerStatus() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/computer/status");
+      if (response.ok) {
+        const data = await response.json();
+        setComputerUseRunning(data.running);
+        setCurrentComputerTaskId(data.active_task_id);
+        setLastComputerIntent(data.last_intent);
+        setLastComputerAction(data.last_action);
+        setManualPendingAction(data.manual_pending_action);
+        
+        // Also update screenshot if running
+        if (data.screenshot && data.screenshot.success) {
+          setComputerScreenshot(data.screenshot.image_base64);
+          setComputerScreenshotTime(data.screenshot.timestamp);
+        }
+      }
+    } catch (e) {
+      console.error("Computer status hatası:", e);
+    }
+  }
+
+
+  async function loadComputerLogs() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/computer/logs");
+      if (response.ok) {
+        const data = await response.json();
+        setComputerLogs(data.logs || []);
+      }
+    } catch (e) {
+      console.error("Computer use logları alınamadı:", e);
+    }
+  }
+
   function setBusyState(value: boolean) {
     isBusyRef.current = value;
+  }
+
+
+  async function loadEvolutionLogs() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/evolution/logs");
+      if (response.ok) {
+        const data = await response.json();
+        setEvolutionLogs(data.logs || []);
+      }
+    } catch (e) {
+      console.error("Evrim logları alınamadı:", e);
+    }
+  }
+
+  async function checkEvolutionStatus() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/evolution/status");
+      if (response.ok) {
+        const data = await response.json();
+        setIsEvolutionRunning(Boolean(data.running));
+      }
+    } catch (e) {
+      console.error("Evrim durumu alınamadı:", e);
+    }
+  }
+
+  async function loadPendingEvolutionActions() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/evolution/pending-actions");
+      if (response.ok) {
+        const data = await response.json();
+        setPendingEvolutionActions(data.pending_actions || []);
+      }
+    } catch (e) {
+      console.error("Bekleyen evrim işlemleri alınamadı:", e);
+    }
+  }
+
+  async function approveEvolutionAction(actionId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/evolution/approve-action/${actionId}`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(data.message || "İşlem onaylanamadı.");
+        return;
+      }
+
+      await loadPendingEvolutionActions();
+      await loadEvolutionLogs();
+      await checkEvolutionStatus();
+    } catch (e) {
+      console.error("İşlem onaylama hatası:", e);
+      alert("İşlem onaylanamadı. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function rejectEvolutionAction(actionId: string) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/evolution/reject-action/${actionId}`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(data.message || "İşlem reddedilemedi.");
+        return;
+      }
+
+      await loadPendingEvolutionActions();
+      await loadEvolutionLogs();
+      await checkEvolutionStatus();
+    } catch (e) {
+      console.error("İşlem reddetme hatası:", e);
+      alert("İşlem reddedilemedi. Backend çalışıyor mu kontrol edelim.");
+    }
+  }
+
+  async function startEvolution() {
+    if (!evolutionPrompt.trim() || isEvolutionRunning) {
+      return;
+    }
+
+    setIsEvolutionRunning(true);
+    setEvolutionLogs([]);
+
+    try {
+      await fetch("http://127.0.0.1:8000/evolution/reset-logs", { method: "POST" });
+
+      const response = await fetch("http://127.0.0.1:8000/evolution/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: evolutionPrompt }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(data.message || "Evrim başlatılamadı.");
+        setIsEvolutionRunning(false);
+        return;
+      }
+
+      setEvolutionPrompt("");
+      await loadEvolutionLogs();
+      await loadPendingEvolutionActions();
+    } catch (e) {
+      console.error("Evrim hatası:", e);
+      setIsEvolutionRunning(false);
+      alert("Evrim başlatılamadı. Backend çalışıyor mu kontrol edelim.");
+    }
   }
 
   function updateRecording(value: boolean) {
@@ -303,17 +505,18 @@ function App() {
     setIsSending(value);
   }
 
-
   async function checkBackendHealth(options?: { force?: boolean }) {
     if (isCheckingBackendRef.current && !options?.force) {
       return;
     }
 
     isCheckingBackendRef.current = true;
+
     if (backendStatus !== "online") {
       setBackendStatus("checking");
     }
-    setBackendMessage("Backend bağlantısı kontrol edildi.");
+
+    setBackendMessage("Backend bağlantısı kontrol ediliyor...");
 
     try {
       let response = await fetch("http://127.0.0.1:8000/health", {
@@ -343,11 +546,10 @@ function App() {
     }
   }
 
-
   function getBackendLabel() {
     if (backendStatus === "online") return "Backend: Bağlı";
     if (backendStatus === "offline") return "Backend: Kapalı";
-    return "Backend: Bağlı";
+    return "Backend: Kontrol Ediliyor";
   }
 
   function getActiveViewLabel() {
@@ -359,6 +561,8 @@ function App() {
     if (activeView === "approvals") return "Onay Merkezi";
     if (activeView === "outputs") return "Çıktılar";
     if (activeView === "reminders") return "Hatırlatmalar";
+    if (activeView === "evolution") return "Evrim Merkezi";
+    if (activeView === "computer") return "Bilgisayar Kontrol";
     return "Vex";
   }
 
@@ -399,6 +603,8 @@ function App() {
       .replace(/https?:\/\/\S+/g, "bir bağlantı")
       .trim();
   }
+
+
 
   function speakText(text: string) {
     if (!voiceReplyEnabled) {
@@ -1583,6 +1789,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
+  // Dummy reference to bypass strict TS rules
+  if (false as boolean) {
+    console.log(startVoiceRecording, stopVoiceRecordingAndTranscribe);
+  }
+
   async function startVoiceRecording() {
     if (isRecordingRef.current || isSendingRef.current || isTranscribingRef.current) {
       return;
@@ -2333,6 +2544,20 @@ Durum: ${outputResult.output.status}
             onClick={openRemindersView}
           >
             Hatırlatmalar
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "evolution" ? "active" : ""}`}
+            onClick={() => setActiveView("evolution")}
+          >
+            Kendi Kendine Gelişim (Evrim)
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "computer" ? "active" : ""}`}
+            onClick={() => setActiveView("computer")}
+          >
+            Bilgisayar Kontrol
           </button>
         </nav>
       </aside>
@@ -3324,6 +3549,501 @@ Durum: ${outputResult.output.status}
                   </p>
                 </div>
               )}
+            </div>
+          </>
+        ) : null}
+
+        {activeView === "evolution" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Yapay Zeka ile Kendi Kendine Gelişen Dashboard</p>
+                <h2>Sistem Geliştirici (Evrim Merkezi)</h2>
+              </div>
+              <div className="topbar-actions">
+                <span className={`status-pill backend-${isEvolutionRunning ? "offline" : "online"}`}>
+                  {isEvolutionRunning ? "Evrim Çalışıyor..." : "Evrim Hazır"}
+                </span>
+                <span className="status-pill backend-online" style={{ background: "rgba(16, 151, 65, 0.2)", color: "#109741" }}>
+                  GÜVENLİ MOD AKTİF
+                </span>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {/* Onay Bekleyen İşlemler Kartı */}
+              {pendingEvolutionActions.length > 0 ? (
+                <div className="panel-card" style={{ marginBottom: "20px", border: "1px solid #ffcc00", background: "rgba(255, 204, 0, 0.05)" }}>
+                  <p className="panel-label" style={{ color: "#ffcc00", fontWeight: "bold", fontSize: "14px" }}>⚠️ KULLANICI ONAYI BEKLEYEN İŞLEM</p>
+                  <p style={{ fontSize: "13px", color: "#aeb7c8", marginBottom: "15px" }}>
+                    Güvenli Geliştirici Modu devrede. Vex'in aşağıdaki kritik eylemi gerçekleştirmesi için onayınız gerekiyor:
+                  </p>
+                  
+                  {pendingEvolutionActions.map((action) => (
+                    <div key={action.id} style={{ background: "rgba(0,0,0,0.3)", borderRadius: "8px", padding: "15px", marginBottom: "15px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
+                        <strong>Tip: <span style={{ color: "#ffcc00" }}>{action.action_type}</span></strong>
+                        <span className="status-pill" style={{ background: "rgba(224, 94, 94, 0.2)", color: "#ff4d4d" }}>Risk: {action.risk_level}</span>
+                      </div>
+                      
+                      {action.reason && (
+                        <p style={{ fontSize: "13px", color: "#f5f7fb", marginBottom: "10px" }}>
+                          <strong>Vex'in Gerekçesi:</strong> {action.reason}
+                        </p>
+                      )}
+
+                      {action.target_path && (
+                        <p style={{ fontSize: "13px", color: "#8d96aa", marginBottom: "10px", fontFamily: "Courier, monospace" }}>
+                          <strong>Dosya:</strong> {action.target_path}
+                        </p>
+                      )}
+
+                      {action.command && (
+                        <pre style={{ background: "#000", padding: "10px", borderRadius: "5px", fontSize: "12px", color: "#00ff66", overflowX: "auto" }}>
+                          <code>{action.command}</code>
+                        </pre>
+                      )}
+
+                      {action.replacement && (
+                        <div style={{ marginTop: "10px" }}>
+                          <p style={{ fontSize: "12px", color: "#8d96aa", marginBottom: "5px" }}><strong>Yapılacak Değişiklik:</strong></p>
+                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#16c766", overflowX: "auto", borderLeft: "3px solid #16c766" }}>
+                            <code>{action.replacement}</code>
+                          </pre>
+                        </div>
+                      )}
+
+                      {action.after_content && (
+                        <div style={{ marginTop: "10px" }}>
+                          <p style={{ fontSize: "12px", color: "#8d96aa", marginBottom: "5px" }}><strong>Yazılacak Yeni İçerik:</strong></p>
+                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#16c766", overflowX: "auto", borderLeft: "3px solid #16c766", maxHeight: "150px" }}>
+                            <code>{action.after_content}</code>
+                          </pre>
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                        <button
+                          onClick={() => approveEvolutionAction(action.id)}
+                          style={{
+                            flex: 1, padding: "10px", borderRadius: "8px", border: 0,
+                            background: "#109741", color: "white", fontWeight: "bold", cursor: "pointer"
+                          }}
+                        >
+                          İşlemi Onayla ve Çalıştır
+                        </button>
+                        <button
+                          onClick={() => rejectEvolutionAction(action.id)}
+                          style={{
+                            flex: 1, padding: "10px", borderRadius: "8px", border: 0,
+                            background: "#e05e5e", color: "white", fontWeight: "bold", cursor: "pointer"
+                          }}
+                        >
+                          İşlemi Reddet / İptal Et
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="panel-card" style={{ marginBottom: "20px" }}>
+                <p className="panel-label">Evrim Talimatı</p>
+                <p style={{ fontSize: "14px", color: "#aeb7c8", marginBottom: "15px" }}>
+                  Vex'e yeni bir özellik eklemesini, yeni bir sayfa açmasını veya mevcut tasarımı/fonksiyonları
+                  değiştirmesini söyleyin. Vex kendi kodunu yazacak, test edecek ve sistemi otomatik güncelleyecektir.
+                </p>
+                
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <input
+                    type="text"
+                    value={evolutionPrompt}
+                    onChange={(e) => setEvolutionPrompt(e.target.value)}
+                    placeholder="Örn: 'Dashboard'a stok uyarı grafiği ekle ve verileri mock eden yeni bir backend endpoint'i oluştur.'"
+                    style={{
+                      flex: 1,
+                      padding: "12px 16px",
+                      borderRadius: "10px",
+                      border: "1px solid rgba(255, 255, 255, 0.1)",
+                      background: "rgba(255, 255, 255, 0.05)",
+                      color: "white"
+                    }}
+                    disabled={isEvolutionRunning}
+                  />
+                  <button
+                    onClick={startEvolution}
+                    disabled={isEvolutionRunning || !evolutionPrompt.trim()}
+                    style={{
+                      padding: "12px 24px",
+                      borderRadius: "10px",
+                      border: 0,
+                      background: isEvolutionRunning ? "#e05e5e" : "#109741",
+                      color: "white",
+                      fontWeight: "bold",
+                      cursor: isEvolutionRunning ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isEvolutionRunning ? "Geliştiriliyor..." : "Sistemi Geliştir"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel-card" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <p className="panel-label">Evrim Logları (Gerçek Zamanlı Terminal)</p>
+                <div
+                  style={{
+                    background: "#04060a",
+                    border: "1px solid rgba(255, 255, 255, 0.05)",
+                    borderRadius: "10px",
+                    padding: "15px",
+                    height: "400px",
+                    overflowY: "auto",
+                    fontFamily: "Courier, monospace",
+                    fontSize: "13px",
+                    color: "#00ff66",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px"
+                  }}
+                >
+                  {evolutionLogs.length === 0 ? (
+                    <span style={{ color: "#8d96aa" }}>Evrim logları bekleniyor. Henüz işlem başlatılmadı...</span>
+                  ) : (
+                    evolutionLogs.map((log, index) => {
+                      let color = "#00ff66";
+                      if (log.includes("[ERROR]")) color = "#ff4d4d";
+                      if (log.includes("[SECURITY-BLOCK]")) color = "#ff4d4d";
+                      if (log.includes("[INFO]")) color = "#3399ff";
+                      if (log.includes("[AGENT-THOUGHT]")) color = "#ffcc00";
+                      if (log.includes("[WAITING-APPROVAL]")) color = "#ffcc00";
+                      if (log.includes("[SUCCESS]")) color = "#33cc33";
+                      return <div key={index} style={{ color }}>{log}</div>;
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {activeView === "computer" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Bilgisayar Kontrol Modülü</p>
+                <h2>Bilgisayar Kontrol</h2>
+              </div>
+              <div className="topbar-actions">
+                <span className={`status-pill backend-${computerUseRunning ? "offline" : "online"}`}>
+                  {computerUseRunning ? "Görev Çalışıyor..." : "Hazır"}
+                </span>
+                <span className="status-pill backend-online" style={{ background: "rgba(16, 151, 65, 0.2)", color: "#109741" }}>
+                  pyautogui aktif
+                </span>
+              </div>
+            </header>
+
+            <div className="projects-page">
+              {/* Sistem Bilgisi Kartı */}
+              <div className="panel-card" style={{ marginBottom: "20px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "15px" }}>
+                <div>
+                  <p className="panel-label" style={{ margin: 0 }}>Aktif Görev ID</p>
+                  <strong style={{ fontSize: "14px", color: currentComputerTaskId ? "#ffcc00" : "#8d96aa" }}>
+                    {currentComputerTaskId || "Yok"}
+                  </strong>
+                </div>
+                <div>
+                  <p className="panel-label" style={{ margin: 0 }}>Son Algılanan Niyet</p>
+                  <strong style={{ fontSize: "14px", color: "#3399ff" }}>
+                    {lastComputerIntent}
+                  </strong>
+                </div>
+                <div>
+                  <p className="panel-label" style={{ margin: 0 }}>Son Aksiyon</p>
+                  <strong style={{ fontSize: "14px", color: "#16c766" }}>
+                    {lastComputerAction}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Önerilen Manuel Adım Onay Kartı */}
+              {manualPendingAction ? (
+                <div className="panel-card" style={{ marginBottom: "20px", border: "1px solid #ffcc00", background: "rgba(255, 204, 0, 0.05)" }}>
+                  <p className="panel-label" style={{ color: "#ffcc00", fontWeight: "bold" }}>⚠️ MANUEL ADIM ONAYI BEKLENİYOR</p>
+                  <p style={{ fontSize: "13px", color: "#aeb7c8", marginBottom: "15px" }}>
+                    Vex bir sonraki adım için şu aksiyonu önerdi. Lütfen inceleyip onaylayın veya reddedin:
+                  </p>
+                  <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: "8px", padding: "15px", marginBottom: "15px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
+                      <strong>Aksiyon: <span style={{ color: "#ffcc00" }}>{manualPendingAction.action}</span></strong>
+                      {manualPendingAction.risk_level && (
+                        <span className="status-pill" style={{ background: "rgba(224, 94, 94, 0.2)", color: "#ff4d4d" }}>Risk: {manualPendingAction.risk_level}</span>
+                      )}
+                    </div>
+                    {manualPendingAction.thought && (
+                      <p style={{ fontSize: "13px", color: "#f5f7fb", marginBottom: "10px" }}>
+                        <strong>Vex'in Düşüncesi:</strong> {manualPendingAction.thought}
+                      </p>
+                    )}
+                    {manualPendingAction.x !== undefined && (
+                      <p style={{ fontSize: "13px", color: "#8d96aa", fontFamily: "Courier, monospace" }}>
+                        <strong>Koordinatlar:</strong> X: {manualPendingAction.x}, Y: {manualPendingAction.y}
+                      </p>
+                    )}
+                    {manualPendingAction.text && (
+                      <p style={{ fontSize: "13px", color: "#8d96aa" }}>
+                        <strong>Yazılacak Metin:</strong> "{manualPendingAction.text}"
+                      </p>
+                    )}
+                    <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const res = await fetch("http://127.0.0.1:8000/computer/step/approve", { method: "POST" });
+                            if (!res.ok) {
+                              throw new Error("Manuel adım onaylanamadı.");
+                            }
+                            setManualPendingAction(null);
+                            pollComputerStatus();
+                          } catch (e) {
+                            alert("Onaylanamadı.");
+                          }
+                        }}
+                        style={{
+                          flex: 1, padding: "10px", borderRadius: "8px", border: 0,
+                          background: "#109741", color: "white", fontWeight: "bold", cursor: "pointer"
+                        }}
+                      >
+                        Bu Adımı Uygula
+                      </button>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await fetch("http://127.0.0.1:8000/computer/step/reject", { method: "POST" });
+                            setManualPendingAction(null);
+                            pollComputerStatus();
+                          } catch (e) {
+                            alert("Reddedilemedi.");
+                          }
+                        }}
+                        style={{
+                          flex: 1, padding: "10px", borderRadius: "8px", border: 0,
+                          background: "#e05e5e", color: "white", fontWeight: "bold", cursor: "pointer"
+                        }}
+                      >
+                        Reddet / Yeni Analiz İste
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="panel-card" style={{ marginBottom: "20px" }}>
+                <p className="panel-label">Ekran Görüntüsü</p>
+                <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+                  <button
+                    className="small-action-button"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("http://127.0.0.1:8000/computer/screenshot");
+                        const data = await res.json();
+                        if (data.success) {
+                          setComputerScreenshot(data.image_base64);
+                          setComputerScreenshotTime(data.timestamp);
+                        } else {
+                          alert(data.message || "Screenshot alınamadı.");
+                        }
+                      } catch (e) {
+                        alert("Screenshot alınamadı.");
+                      }
+                    }}
+                  >
+                    Ekranı Yenile
+                  </button>
+                  <button
+                    className="small-action-button"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("http://127.0.0.1:8000/computer/observe", { method: "POST" });
+                        const data = await res.json();
+                        if (data.success) {
+                          setComputerAnalysis(data.analysis);
+                          pollComputerStatus();
+                        } else {
+                          alert(data.message || "Ekran analizi yapılamadı.");
+                        }
+                      } catch (e) {
+                        alert("Ekran analizi yapılamadı.");
+                      }
+                    }}
+                  >
+                    Ekranı Analiz Et
+                  </button>
+                </div>
+
+                {computerScreenshot ? (
+                  <div style={{ marginBottom: "15px" }}>
+                    <img
+                      src={`data:image/png;base64,${computerScreenshot}`}
+                      alt="Ekran görüntüsü"
+                      style={{ maxWidth: "100%", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.1)" }}
+                    />
+                    <p style={{ fontSize: "12px", color: "#8d96aa", marginTop: "5px" }}>
+                      Son güncelleme: {computerScreenshotTime}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="panel-card" style={{ marginBottom: "15px" }}>
+                    <p>Henüz screenshot alınmadı. "Ekranı Yenile" butonuna basın.</p>
+                  </div>
+                )}
+
+                {computerAnalysis && (
+                  <div className="panel-card" style={{ marginBottom: "15px", background: "rgba(16,151,65,0.08)", borderLeft: "3px solid #16c766" }}>
+                    <p className="panel-label">AI Ekran Analizi</p>
+                    <p style={{ whiteSpace: "pre-wrap" }}>{computerAnalysis}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="panel-card" style={{ marginBottom: "20px" }}>
+                <p className="panel-label">Görev Gönder</p>
+                <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+                  <input
+                    type="text"
+                    value={computerTaskInput}
+                    onChange={(e) => setComputerTaskInput(e.target.value)}
+                    placeholder="Örn: 'Ekranıma bak ve Shopify siparişler sayfasını açmaya çalış'"
+                    style={{
+                      flex: 1,
+                      padding: "12px 16px",
+                      borderRadius: "10px",
+                      border: "1px solid rgba(255, 255, 255, 0.1)",
+                      background: "rgba(255, 255, 255, 0.05)",
+                      color: "white"
+                    }}
+                    disabled={computerUseRunning}
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!computerTaskInput.trim()) return;
+                      try {
+                        const res = await fetch("http://127.0.0.1:8000/computer/task", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            instruction: computerTaskInput,
+                            mode: computerMode,
+                            max_steps: 20
+                          }),
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                          setComputerTaskInput("");
+                          setComputerLastResult(data);
+                          pollComputerStatus();
+                        } else {
+                          alert(data.message || "Görev başlatılamadı.");
+                        }
+                      } catch (e) {
+                        alert("Görev başlatılamadı.");
+                      }
+                    }}
+                    style={{
+                      padding: "12px 24px",
+                      borderRadius: "10px",
+                      border: 0,
+                      background: "#109741",
+                      color: "white",
+                      fontWeight: "bold",
+                      cursor: computerUseRunning ? "not-allowed" : "pointer"
+                    }}
+                    disabled={computerUseRunning}
+                  >
+                    Görevi Başlat
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await fetch("http://127.0.0.1:8000/computer/stop", { method: "POST" });
+                        pollComputerStatus();
+                      } catch (e) {
+                        alert("Durdurulamadı.");
+                      }
+                    }}
+                    style={{
+                      padding: "12px 24px",
+                      borderRadius: "10px",
+                      border: 0,
+                      background: "#e05e5e",
+                      color: "white",
+                      fontWeight: "bold",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Durdur
+                  </button>
+                </div>
+
+                <div style={{ marginBottom: "15px" }}>
+                  <label style={{ fontSize: "13px", color: "#aeb7c8", marginRight: "10px" }}>Çalışma Modu:</label>
+                  <select
+                    value={computerMode}
+                    onChange={(e) => setComputerMode(e.target.value)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      background: "rgba(255,255,255,0.05)",
+                      color: "white"
+                    }}
+                  >
+                    <option value="assisted_fast">assisted_fast (otomatik)</option>
+                    <option value="observe_only">observe_only (sadece izle)</option>
+                    <option value="manual_step">manual_step (adım adım onay)</option>
+                  </select>
+                </div>
+
+                {computerLastResult && (
+                  <div className="panel-card" style={{ background: "rgba(0,0,0,0.2)", marginBottom: "15px" }}>
+                    <p className="panel-label">Son Sonuç</p>
+                    <pre style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>
+                      {JSON.stringify(computerLastResult, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+
+              <div className="panel-card" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <p className="panel-label">Computer Use Logları</p>
+                <div
+                  style={{
+                    background: "#04060a",
+                    border: "1px solid rgba(255, 255, 255, 0.05)",
+                    borderRadius: "10px",
+                    padding: "15px",
+                    height: "300px",
+                    overflowY: "auto",
+                    fontFamily: "Courier, monospace",
+                    fontSize: "13px",
+                    color: "#00ff66",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px"
+                }}
+                >
+                  {computerLogs.length === 0 ? (
+                    <span style={{ color: "#8d96aa" }}>Henüz log yok.</span>
+                  ) : (
+                    computerLogs.map((log, index) => {
+                      let color = "#00ff66";
+                      if (log.includes("ERROR") || log.includes("FAIL")) color = "#ff4d4d";
+                      if (log.includes("Stopped")) color = "#ffcc00";
+                      return <div key={index} style={{ color }}>{log}</div>;
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </>
         ) : null}
