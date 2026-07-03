@@ -1,4 +1,4 @@
-# Env / secrets
+# Secrets
 .env
 .env.*
 *.env
@@ -26,11 +26,9 @@ src-tauri/target/
 # OS
 .DS_Store
 
-# Logs
+# Logs / runtime
 *.log
 logs/
-
-# Media / runtime files
 screenshots/
 recordings/
 audio/
