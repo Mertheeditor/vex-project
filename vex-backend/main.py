@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import (
     approvals,
+    brain,
     chat,
     computer,
     evolution,
@@ -39,6 +40,7 @@ def root():
     return {"success": True, "message": "Vex backend çalışıyor.", "service": "vex-backend"}
 
 app.include_router(health.router)
+app.include_router(brain.router)
 app.include_router(chat.router)
 app.include_router(memory.router)
 app.include_router(projects.router)

@@ -13,6 +13,22 @@ from app.services.gemini_service import generate_with_image, strip_code_fences
 from app.services.screenshot_service import capture_screenshot
 from app.storage.json_store import load_json, save_json
 
+# --- Patch 02: PyAutoGUI failsafe ---
+# Mouse ekranın sol-üst köşesine giderse FailSafeException fırlar ve görev
+# anında durur. Bu, modelin davranışını KISITLAMAZ; sadece sana fiziksel
+# bir acil fren verir. pyautogui yoksa (headless/sunucu) sessizce geçilir.
+_pag_for_setup, _pag_setup_err = optional_import("pyautogui")
+if _pag_for_setup is not None:
+    try:
+        _pag_for_setup.FAILSAFE = True
+        _pag_for_setup.PAUSE = 0.2
+    except Exception:
+        pass
+
+# Bir görevin çalışabileceği en uzun süre (saniye). Aşılırsa görev
+# otomatik durur (TASK_TIMEOUT). Adım limitine ek bir emniyet.
+MAX_TASK_SECONDS = 120
+
 # Vex'in dış görev sırasında kendi kontrol panelini tıklamasını engelleyen
 # tek koruma. Otomasyonu kısıtlamaz; yalnızca kendini tıklayıp döngüye
 # girmesini önler. Tamamen serbest davranış için patch ile False yapılabilir.
@@ -74,6 +90,19 @@ def stop() -> dict:
         state["last_action"] = "stopped"
     add_log("Görev kullanıcı tarafından durduruldu.")
     return {"success": True, "message": "Computer-use durduruldu."}
+
+
+def emergency_stop() -> dict:
+    # Büyük kırmızı "ACİL DURDUR" butonunun bağlandığı fonksiyon. Her şeyi
+    # zorla sıfırlar: aktif görev, bekleyen manuel adım, tüm bayraklar.
+    with _state_lock:
+        state["stop_requested"] = True
+        state["running"] = False
+        state["active_task_id"] = None
+        state["manual_pending_action"] = None
+        state["last_action"] = "emergency_stop"
+    add_log("EMERGENCY_STOP_TRIGGERED: Tüm computer-use işlemleri zorla durduruldu.")
+    return {"success": True, "message": "ACİL DURDUR: tüm işlemler durduruldu."}
 
 
 def plan(instruction: str) -> dict:
@@ -225,6 +254,9 @@ def execute_action(task_id: str, action_data: dict, instruction: str = "") -> di
 
         return {"success": False, "message": f"Bilinmeyen aksiyon: {action}"}
     except Exception as exc:
+        # PyAutoGUI FailSafe'i yutma: run_task'ın failsafe yakalayıcısına gitsin.
+        if "FailSafe" in type(exc).__name__:
+            raise
         add_log(f"Aksiyon hatası: {exc}", task_id)
         return {"success": False, "message": str(exc)}
 
@@ -296,6 +328,7 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
 
     add_log(f"GÖREV BAŞLATILDI: {instruction} (Mod: {mode})", task_id)
 
+    started_at = time.monotonic()
     try:
         max_steps = max(1, min(int(max_steps or 20), 50))
         for step in range(1, max_steps + 1):
@@ -303,6 +336,11 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
                 if state["stop_requested"]:
                     add_log("Görev kullanıcı tarafından durduruldu.", task_id)
                     return {"success": True, "message": "Stopped by user", "steps": step - 1}
+
+            # Süre limiti: bir adım takılsa bile görev sonsuza kadar sürmez.
+            if time.monotonic() - started_at > MAX_TASK_SECONDS:
+                add_log(f"TASK_TIMEOUT: {MAX_TASK_SECONDS}sn süre sınırı aşıldı, görev durduruldu.", task_id)
+                return {"success": True, "message": "TASK_TIMEOUT", "steps": step - 1}
 
             screenshot = capture_screenshot()
             if not screenshot.get("success"):
@@ -356,6 +394,15 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
 
         add_log(f"Maksimum adım ({max_steps}) sınırına ulaşıldı.", task_id)
         return {"success": True, "message": "Maksimum adıma ulaşıldı", "steps": max_steps}
+    except Exception as exc:
+        # PyAutoGUI FailSafe (mouse sol-üst köşe) dahil beklenmedik her hata
+        # burada yakalanır; görev güvenle sonlanır, state finally'de temizlenir.
+        name = type(exc).__name__
+        if "FailSafe" in name:
+            add_log("FAILSAFE_TRIGGERED: Mouse sol-üst köşeye gitti, görev acilen durduruldu.", task_id)
+            return {"success": True, "message": "FAILSAFE_TRIGGERED", "stopped": True}
+        add_log(f"Görev beklenmedik hatayla durdu: {exc}", task_id)
+        return {"success": False, "message": f"Beklenmedik hata: {exc}"}
     finally:
         with _state_lock:
             state["running"] = False

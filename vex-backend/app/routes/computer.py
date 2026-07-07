@@ -63,6 +63,11 @@ def computer_stop():
     return computer_service.stop()
 
 
+@router.post("/computer/emergency-stop")
+def computer_emergency_stop():
+    return computer_service.emergency_stop()
+
+
 @router.post("/computer/plan")
 def computer_plan(request: ComputerPlanRequest):
     return computer_service.plan(request.instruction)
