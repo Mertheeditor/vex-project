@@ -3,33 +3,51 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 from io import BytesIO
+from typing import Any, Dict
 
-from app.core.optional_imports import optional_import
 
-def capture_screenshot() -> dict:
-    mss_module, mss_error = optional_import("mss")
-    image_cls, pil_error = optional_import("PIL.Image", "Image")
-    if mss_error:
-        return {"success": False, "message": f"mss paketi kurulu değil veya çalışmıyor: {mss_error}"}
-    if pil_error:
-        return {"success": False, "message": f"Pillow/PIL paketi kurulu değil veya çalışmıyor: {pil_error}"}
+def capture_screenshot() -> Dict[str, Any]:
     try:
-        with mss_module.mss() as sct:
+        try:
+            import mss
+            from PIL import Image
+        except Exception as import_error:
+            return {
+                "success": False,
+                "message": f"Screenshot için gerekli paket eksik: {import_error}",
+            }
+
+        with mss.mss() as sct:
             monitor = sct.monitors[0]
-            shot = sct.grab(monitor)
-            image = image_cls.frombytes("RGB", shot.size, shot.rgb)
+            raw_screenshot = sct.grab(monitor)
+
+            image = Image.frombytes(
+                "RGB",
+                raw_screenshot.size,
+                raw_screenshot.rgb,
+            )
+
             buffer = BytesIO()
             image.save(buffer, format="PNG", optimize=True)
-            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+            image_bytes = buffer.getvalue()
+            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+            width, height = image.size
+
             return {
                 "success": True,
-                "image_base64": encoded,
+                "image_base64": image_base64,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "width": shot.size.width,
-                "height": shot.size.height,
+                "width": width,
+                "height": height,
             }
-    except Exception as exc:
+
+    except Exception as error:
         return {
             "success": False,
-            "message": f"Screenshot alınamadı: {exc}. macOS Screen Recording iznini Terminal/VS Code/Python için kontrol et.",
+            "message": (
+                f"Screenshot alınamadı: {error}. "
+                "macOS Screen Recording iznini Terminal/VS Code/Python için kontrol et."
+            ),
         }

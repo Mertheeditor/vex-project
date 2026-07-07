@@ -50,3 +50,14 @@ vex-backend/audio/
 vex-backend/uploads/
 vex-backend/downloads/
 vex-backend/models/
+# --- Vex Patch 01 ---
+# Kişisel runtime verileri ve arşiv git'e girmez
+_archive/
+vex-backend/data/
+vex-backend/*.json.corrupt-*
+
+# Geçici patch/kurulum betikleri ve yedekler
+apply_vex_*.py
+vex_patch_*.py
+*.bak-*
+start-vex.backup-*.sh

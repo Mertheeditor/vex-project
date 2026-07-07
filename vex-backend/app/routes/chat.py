@@ -1,18 +1,67 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+
+from app.core.config import CHAT_HISTORY_LIMIT
 from app.schemas.common import ChatRequest
 from app.services.gemini_service import generate_text
 from app.storage.memory_store import load_memory
 
 router = APIRouter()
 
+MAX_MESSAGE_CHARS = 2000
+
+
+def _display_name(memory: dict) -> str:
+    user = memory.get("user") or {}
+    name = str(user.get("preferred_name") or user.get("name") or "").strip()
+    return name or "Mert"
+
+
+def _build_history_block(history: list, user_name: str) -> str:
+    if not history:
+        return ""
+    lines: list[str] = []
+    for item in history[-CHAT_HISTORY_LIMIT:]:
+        sender = (getattr(item, "sender", "") or "").strip()
+        text = (getattr(item, "text", "") or "").strip()
+        if not text:
+            continue
+        speaker = user_name if sender in ("Sen", user_name) else "Vex"
+        if len(text) > MAX_MESSAGE_CHARS:
+            text = text[:MAX_MESSAGE_CHARS] + " …"
+        lines.append(f"{speaker}: {text}")
+    if not lines:
+        return ""
+    return "Önceki konuşma:\n" + "\n".join(lines) + "\n\n"
+
+
 @router.post("/chat")
 def chat(request: ChatRequest):
     memory = load_memory()
-    rules = "\n".join(f"- {rule}" for rule in memory.get("rules", []))
-    prompt = f"Sen Vex'sin, Mert'in kişisel yapay zeka iş arkadaşısın. Kısa, net ve pratik cevap ver.\nKurallar:\n{rules}\n\nMert: {request.message}\nVex:"
+    user_name = _display_name(memory)
+    assistant = memory.get("assistant") or {}
+    tone = assistant.get("tone") or "samimi, pratik, doğal, iş odaklı"
+    rules_list = memory.get("rules", []) or []
+    rules = "\n".join(f"- {rule}" for rule in rules_list) if rules_list else "- (özel kural yok)"
+
+    history_block = _build_history_block(request.history, user_name)
+
+    prompt = (
+        f"Sen Vex'sin; {user_name} adlı kullanıcının kişisel yapay zeka iş arkadaşısın. "
+        f"Üslubun: {tone}. Kısa, net ve pratik cevap ver; önceki konuşmayı dikkate al.\n"
+        f"Hafızadaki kurallar:\n{rules}\n\n"
+        f"{history_block}"
+        f"{user_name}: {request.message}\n"
+        f"Vex:"
+    )
+
     result = generate_text(prompt)
     if result.get("success"):
-        return {"success": True, "reply": result.get("text") or "Tamam Mert."}
-    return {"success": True, "reply": f"Backend çalışıyor Mert. Gemini hazır değil: {result.get('message')}"}
+        reply = (result.get("text") or "").strip() or f"Tamam {user_name}."
+        return {"success": True, "reply": reply}
+    return {
+        "success": False,
+        "reply": f"⚠️ Şu an Gemini'ye ulaşamıyorum {user_name}. Teknik detay: {result.get('message')}",
+        "error": result.get("message"),
+    }
