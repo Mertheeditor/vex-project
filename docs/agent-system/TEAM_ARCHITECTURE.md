@@ -166,5 +166,5 @@ Bir uzman görevini bitirdiğinde Lead'e **handoff raporu** verir:
 Bu sözleşme, Vex projesinde çalışan tüm ajanlar (Lead, architect, backend-builder, frontend-builder, qa-engineer, security-auditor, diff-auditor) için **bağlayıcıdır**. Değişiklikler Lead tarafından `docs/agent-system/working-agreements.md` ile senkronize edilerek yapılır.
 
 ---
-*Son güncelleme: 2026-07-12*  
+*Son güncelleme: 2026-07-12*
 *Sürüm: 1.0 (Aşama 2A — Agent Definitions ve Worktree Contract)*

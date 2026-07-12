@@ -45,12 +45,12 @@ interface Props {
 export function ComponentName({ title, onAction, optional = 10 }: Props) {
   // Hooks first
   const [state, setState] = useState<SomeType>(initial);
-  
+
   // Event handlers
   const handleClick = useCallback((id: string) => {
     onAction(id);
   }, [onAction]);
-  
+
   // Render
   return (
     <div className="component-name">

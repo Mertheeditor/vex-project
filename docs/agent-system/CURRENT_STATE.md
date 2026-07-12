@@ -10,7 +10,7 @@
 - **Current commit**: b90dabe (Patch 03: JARVIS beyni - LLM orchestrator + tool registry)
 - **Clean working tree**: Yes (verified)
 - **Checkpoint branch**: checkpoint/vex-pre-agent-20260712 exists
-- **Uncommitted changes**: 
+- **Uncommitted changes**:
   - .claude/hooks/pre_tool_guard.py (new)
   - docs/sprint/ROADMAP.md (new)
   - docs/sprint/QUEUE.md (new)

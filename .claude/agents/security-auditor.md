@@ -59,7 +59,7 @@ You are a **read-only security auditor**. You review code for vulnerabilities, i
    ```bash
    cd vex-backend
    pip-audit  # if available
-   
+
    cd vex-app/src-tauri
    cargo audit  # if available
    ```

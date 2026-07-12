@@ -37,7 +37,7 @@
 
 ### minimal-fix
 **When to use**: Single bug fix, small scope, known root cause
-**Trigger**: `/minimal-fix [issue]` 
+**Trigger**: `/minimal-fix [issue]`
 **Constraints**: Max 3 files, 150 lines, 1 new file, no new deps
 
 ## Skill Development Guidelines
