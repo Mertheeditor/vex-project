@@ -96,3 +96,24 @@ class ListenSpeechRequest(BaseModel):
     silence_seconds: float = 1.2
     peak_threshold: float = 0.025
     average_threshold: float = 0.003
+
+class WakeListenSpeechRequest(BaseModel):
+    wake_seconds: float = 4
+    active_silence_seconds: float = 10
+    max_active_seconds: float = 90
+    peak_threshold: float = 0.075
+    average_threshold: float = 0.012
+
+class DetectWakeWordRequest(BaseModel):
+    wake_seconds: float = 4
+    peak_threshold: float = 0.075
+    average_threshold: float = 0.012
+
+class ActiveListenSpeechRequest(BaseModel):
+    active_silence_seconds: float = 10
+    max_active_seconds: float = 90
+    peak_threshold: float = 0.075
+    average_threshold: float = 0.012
+
+class SpeakTextRequest(BaseModel):
+    text: str = ""

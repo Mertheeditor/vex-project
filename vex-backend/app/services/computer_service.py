@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 import time
 import uuid
@@ -118,28 +119,35 @@ def plan(instruction: str) -> dict:
     }
 
 
-def _decision_prompt(instruction: str) -> str:
+def _decision_prompt(instruction: str, note: str = "") -> str:
     # Modele: ham ekrana bak, tek bir sonraki aksiyonu JSON olarak ver.
-    # Elle intent/allowlist yok; kararı tamamen model verir.
-    guard_note = (
-        "\nÖNEMLİ: Ekranda Vex'in kendi kontrol paneli (\"Görevi Başlat\", "
-        "\"Durdur\" butonları, sohbet penceresi) görünebilir. Görev açıkça Vex "
-        "hakkında değilse bu panele DOKUNMA; sadece ilgili dış pencerelerle "
-        "çalış.\n"
-        if SELF_UI_GUARD
-        else "\n"
-    )
+    # Elle intent/allowlist yok; kararı tamamen model verir. note ile önceki
+    # adımın sonucu ve tekrar uyarısı geri beslenir (körlemesine tekrarı önler).
     return (
         "Sen Vex'in bilgisayar kontrol zekâsısın. Sana kullanıcının o anki ekran "
         "görüntüsü veriliyor. Görevi tamamlamak için atılacak BİR SONRAKİ tekil "
         "adıma sen karar ver. Elle tanımlanmış kural yok; ekranda ne görüyorsan "
         "ona göre mantıklı davran.\n"
         f'Görev: "{instruction}"\n'
-        f"{guard_note}"
+        "\n"
+        "UYGULAMA AÇMA: Bir Mac uygulamasını (Spotify, Safari, Chrome, Notlar...) "
+        "açmak için action=\"open_app\" ve app alanına uygulama adını yaz. Bu "
+        "GÜVENİLİRDİR ve uygulamayı öne getirir. Spotlight (cmd+space) ile "
+        "uğraşma, klavye dansı yapma.\n"
+        "\n"
+        "VEX PENCERESİ: Ekranda Vex'in kendi kontrol paneli (görev kutusu, "
+        "\"Görevi Başlat\"/\"Durdur\" butonları, sol menü, sohbet) görünebilir. "
+        "Görevi zaten o panelden başlattın; Vex'in kendi penceresine TIKLAMA. "
+        "Sadece HEDEF uygulamayla ilgilen. Ekranda yalnızca Vex görünüyorsa ilk "
+        "hamlen hedef uygulamayı open_app ile açmak (veya open_url ile siteye "
+        "gitmek) olsun.\n"
+        f"{note}"
+        "\n"
         "Yalnızca aşağıdaki JSON'u döndür (başka açıklama, Markdown yazma):\n"
         "{\n"
         '  "thought": "Ekranda ne görüyorsun ve neden bu adımı seçtin (kısa)",\n'
-        '  "action": "click | double_click | type_text | press_key | hotkey | scroll | open_url | wait | done | ask_user",\n'
+        '  "action": "open_app | open_url | click | double_click | type_text | press_key | hotkey | scroll | set_volume | mute_toggle | wait | done | ask_user",\n'
+        '  "app": "<open_app için uygulama adı, örn Spotify>",\n'
         '  "x": <tıklama X koordinatı, gerekliyse>,\n'
         '  "y": <tıklama Y koordinatı, gerekliyse>,\n'
         '  "text": "<type_text için yazılacak metin ya da ask_user için soru>",\n'
@@ -147,11 +155,35 @@ def _decision_prompt(instruction: str) -> str:
         '  "keys": ["<hotkey kombinasyonu, örn cmd, space>"],\n'
         '  "url": "<open_url için tam https adresi>",\n'
         '  "clicks": <scroll miktarı, + yukarı - aşağı>,\n'
+        '  "level": <set_volume için 0-100 arası sayı>,\n'
+        '  "muted": <mute_toggle için true/false>,\n'
         '  "seconds": <wait için saniye>\n'
         "}\n"
         "Görev tamamlandıysa action=\"done\". Kullanıcıdan bilgi gerekiyorsa "
         "action=\"ask_user\" ve soruyu text alanına yaz."
     )
+
+
+def _action_signature(action_data: dict) -> str:
+    # Aynı/benzer aksiyonu tespit etmek için imza üretir. Tıklamalarda
+    # koordinatlar ~40px kovalara yuvarlanır ki 86,421 ile 69,427 "aynı yer"
+    # sayılsın (model logda tam bunu yapıp döngüye giriyordu).
+    a = (action_data.get("action") or "").lower()
+    if a in ("click", "double_click", "move"):
+        x = action_data.get("x") or 0
+        y = action_data.get("y") or 0
+        return f"{a}:{round(x / 40)},{round(y / 40)}"
+    if a == "hotkey":
+        return "hotkey:" + "+".join(str(k).lower() for k in (action_data.get("keys") or []))
+    if a == "press_key":
+        return f"press:{(action_data.get('key') or '').lower()}"
+    if a == "type_text":
+        return f"type:{(action_data.get('text') or '')[:24]}"
+    if a == "open_app":
+        return f"open_app:{(action_data.get('app') or '').lower()}"
+    if a == "open_url":
+        return f"open_url:{(action_data.get('url') or '')[:40]}"
+    return a
 
 
 def _is_self_ui(action_data: dict, instruction: str) -> bool:
@@ -190,11 +222,70 @@ def execute_action(task_id: str, action_data: dict, instruction: str = "") -> di
         add_log(f"OPEN_URL: {url}", task_id)
         return {"success": True, "action": "open_url", "url": url}
 
+    # open_app: Mac uygulamasını GÜVENİLİR şekilde açar (Spotlight dansı yok).
+    # subprocess arg-list kullanılır (shell=True YOK) -> komut enjeksiyonu riski
+    # yok. Allowlist yok: kararı model verir. Uygulama öne gelir, böylece model
+    # kendi Vex penceresine takılmak yerine gerçek hedefle çalışır.
+    if action == "open_app":
+        import sys as _sys
+        app_name = (action_data.get("app") or action_data.get("app_name") or "").strip()
+        if not app_name:
+            return {"success": False, "message": "app adı gerekli"}
+        if _sys.platform != "darwin":
+            return {"success": False, "message": "open_app şu an yalnızca macOS'ta destekleniyor."}
+        try:
+            subprocess.run(["open", "-a", app_name], check=True, capture_output=True)
+            add_log(f"OPEN_APP: {app_name}", task_id)
+            return {"success": True, "action": "open_app", "app": app_name}
+        except subprocess.CalledProcessError:
+            add_log(f"OPEN_APP başarısız: '{app_name}' bulunamadı/açılamadı", task_id)
+            return {"success": False, "message": f"'{app_name}' açılamadı (kurulu mu, adı doğru mu?)"}
+
     if action == "wait":
         seconds = float(action_data.get("seconds", 1) or 1)
         time.sleep(max(0.0, min(seconds, 30.0)))
         add_log(f"WAIT: {seconds}s", task_id)
         return {"success": True, "action": "wait", "seconds": seconds}
+
+    if action == "set_volume":
+        level = action_data.get("level", 50)
+        try:
+            level = max(0, min(int(level), 100))
+        except Exception:
+            return {"success": False, "message": "Geçerli bir ses seviyesi gerekli (0-100)."}
+
+        try:
+            subprocess.run(
+                ["osascript", "-e", f"set volume output volume {level}"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            add_log(f"SET_VOLUME: {level}", task_id)
+            return {"success": True, "action": "set_volume", "level": level}
+        except Exception as exc:
+            add_log(f"SET_VOLUME hatası: {exc}", task_id)
+            return {"success": False, "message": f"Ses seviyesi ayarlanamadı: {exc}"}
+
+    if action == "mute_toggle":
+        muted = action_data.get("muted", True)
+        try:
+            if bool(muted):
+                script = "set volume with output muted"
+            else:
+                script = "set volume without output muted"
+
+            subprocess.run(
+                ["osascript", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            add_log(f"MUTE_TOGGLE: {'muted' if bool(muted) else 'unmuted'}", task_id)
+            return {"success": True, "action": "mute_toggle", "muted": bool(muted)}
+        except Exception as exc:
+            add_log(f"MUTE_TOGGLE hatası: {exc}", task_id)
+            return {"success": False, "message": f"Ses durumu değiştirilemedi: {exc}"}
 
     if action == "done":
         return {"success": True, "action": "done"}
@@ -329,6 +420,8 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
     add_log(f"GÖREV BAŞLATILDI: {instruction} (Mod: {mode})", task_id)
 
     started_at = time.monotonic()
+    recent_sigs: list[str] = []   # son aksiyon imzaları (döngü tespiti)
+    last_feedback = ""            # önceki adımın sonucu (modele geri beslenir)
     try:
         max_steps = max(1, min(int(max_steps or 20), 50))
         for step in range(1, max_steps + 1):
@@ -346,7 +439,21 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
             if not screenshot.get("success"):
                 return screenshot
 
-            decision = generate_with_image(_decision_prompt(instruction), screenshot["image_base64"], "image/png")
+            # DÖNGÜ-KIRICI: son 2 aksiyon aynıysa modele "bu işe yaramıyor,
+            # strateji değiştir" uyarısını geri besle. Böylece logdaki gibi 20x
+            # aynı tıklama/kısayol yerine model ikinci denemede yön değiştirir.
+            note = ""
+            if last_feedback:
+                note += f"\nÖNCEKİ ADIM: {last_feedback}\n"
+            if len(recent_sigs) >= 2 and recent_sigs[-1] == recent_sigs[-2]:
+                note += (
+                    "\n⚠️ UYARI: Son adımlarda AYNI şeyi tekrar ediyorsun ve ekran "
+                    "değişmiyor — bu işe YARAMIYOR. Aynı aksiyonu bir daha yapma. "
+                    "TAMAMEN farklı bir yaklaşım dene: uygulamayı open_app ile aç, "
+                    "open_url ile siteye git, ya da bambaşka bir yere odaklan.\n"
+                )
+
+            decision = generate_with_image(_decision_prompt(instruction, note), screenshot["image_base64"], "image/png")
             if not decision.get("success"):
                 add_log(f"Model karar veremedi: {decision.get('message')}", task_id)
                 return {"success": False, "message": decision.get("message")}
@@ -370,6 +477,21 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
                 add_log(f"Vex soruyor: {question}", task_id)
                 return {"success": True, "message": "Kullanıcı girdisi gerekiyor", "question": question, "steps": step}
 
+            # DÖNGÜ-KIRICI (sert): aynı aksiyon 4 kez üst üste geldiyse, körlemesine
+            # devam etmek yerine nazikçe dur ve kullanıcıdan yardım iste. Logdaki
+            # 20-adım israfını ve "runaway" hissini bitirir.
+            sig = _action_signature(action_data)
+            if len(recent_sigs) >= 3 and all(s == sig for s in recent_sigs[-3:]):
+                add_log(f"STUCK_LOOP: '{sig}' aksiyonu tekrar tekrar denendi, sonuç yok. Görev durduruldu.", task_id)
+                return {
+                    "success": True,
+                    "message": "STUCK_LOOP",
+                    "reply": "Bu görevde takıldım — aynı adımı tekrarlıyorum ama ekran değişmiyor. "
+                             "Farklı bir yol tarif eder misin, ya da ne görmem gerektiğini söyler misin?",
+                    "steps": step,
+                }
+            recent_sigs.append(sig)
+
             # manual_step modunda adımı uygulamadan onaya bırak.
             if mode == "manual_step":
                 with _state_lock:
@@ -388,6 +510,9 @@ def run_task(instruction: str, mode: str = "autonomous", max_steps: int = 20) ->
             if not result.get("success"):
                 add_log(f"Aksiyon başarısız: {result.get('message')}", task_id)
                 return result
+
+            # Bir sonraki adımda modele geri besleme: ne yaptın + sonuç.
+            last_feedback = f"{action} uygulandı (başarılı)."
 
             # Ekranın oturması için kısa bekleme.
             time.sleep(0.6)

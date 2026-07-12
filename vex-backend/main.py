@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.services import scheduler_service
+
 from app.routes import (
     approvals,
     brain,
@@ -20,7 +22,7 @@ from app.routes import (
     workspace,
 )
 
-app = FastAPI(title="Vex Backend", version="0.2.0")
+app = FastAPI(title="Vex Backend", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +36,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _start_background_services():
+    scheduler_service.start()
 
 @app.get("/")
 def root():

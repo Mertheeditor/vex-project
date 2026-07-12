@@ -1,64 +1,59 @@
 # Vex Project Instructions
 
-## Proje yapısı
-Bu proje iki ana parçadan oluşur:
+## Proje mimarisi
+- Kök: `/Users/mert/Vex`
+- Frontend: `/Users/mert/Vex/vex-app`
+- Backend: `/Users/mert/Vex/vex-backend`
+- Frontend stack: React 19, TypeScript, Vite 7, Tauri 2
+- Backend stack: Python, FastAPI, Uvicorn
+- Frontend adresi: `http://localhost:1420`
+- Backend adresi: `http://127.0.0.1:8000`
+- Ana başlangıç scripti: `/Users/mert/Vex/start-vex.sh`
 
-- Frontend: ./vex-app
-- Backend: ./vex-backend
+## Genel çalışma akışı
+1. Önce yalnızca görevle ilgili klasörleri incele.
+2. Dosya, fonksiyon, route veya ayar tahmin etme; arayıp doğrula.
+3. En küçük ama eksiksiz değişikliği yap.
+4. İlgisiz refactor yapma.
+5. Değişiklikten sonra yalnızca ilgili kontrolleri çalıştır.
+6. Sonuçta sadece değişiklikleri ve test/doğrulama sonuçlarını özetle.
 
-Kök klasör:
-- /Users/mert/Vex
-
-Frontend package.json:
-- /Users/mert/Vex/vex-app/package.json
-
-Backend ana dosya:
-- /Users/mert/Vex/vex-backend/main.py
-
-## Dil ve cevap tarzı
-- Kullanıcıya Türkçe cevap ver.
-- Gereksiz uzun açıklama yapma.
-- Kod değişikliklerinden önce kısa plan çıkar.
+## Genel kurallar
+- Kullanıcıya Türkçe ve kısa cevap ver.
+- Kod değişikliğinden önce kısa plan çıkar.
 - Kullanıcı onaylamadan büyük refactor yapma.
-- Kod değişikliklerinde mümkünse tam dosya içeriği ver.
-- Terminal komutlarını mümkün olduğunca tek blok halinde ver.
+- Bir görev için tüm projeyi tarama; sadece ilgili alanları incele.
+- Çalışan özellikleri sessizce kaldırma.
+- Geçici mock, sahte başarı cevabı veya kök nedeni gizleyen geniş hata bastırmaları ekleme.
+- Hata varsa kök nedeni çözmeden görev tamamlandı deme.
+- Uygulama kodunu sohbette tamamen yazdırmak yerine dosyaları doğrudan düzenle.
+- Aynı oturumda tek ana görev üzerinde kal; yeni ve ilgisiz görevde temiz bağlam tercih et.
+- Uzun görevlerde compact özette görev, kök neden, değiştirilen dosyalar ve test sonuçlarını koru.
 
-## Mutlak kurallar
-- .env dosyasını silme.
-- API key/token/secret değerlerini terminale yazdırma.
+## Güvenlik ve sınırlar
+- `.env` dosyalarını silme, içeriklerini okuma veya çıktıya yazdırma.
+- API key, token ve secret değerlerini terminale basma.
 - Gereksiz paket güncellemesi yapma.
 - Frontend/backend bağlantısını bozma.
 - Production veya riskli ayarları değiştirme.
-- Veritabanı, migration, delete/drop gibi işlemler için kullanıcıdan onay almadan işlem yapma.
+- Kullanıcı onayı olmadan migration, delete/drop veya dosya silme işlemi yapma.
+- `start-vex.sh` scriptini yalnızca doğrulanmış bariz bir sorun varsa değiştir.
 
-## Frontend
-Frontend klasörü:
-./vex-app
+## Doğrulama ilkesi
+- Frontend komutlarını `vex-app` altında çalıştır.
+- Backend komutlarını `vex-backend` altında çalıştır.
+- Var olmayan script veya araç uydurma.
+- Frontend için mevcut doğrulama yüzeyi `package.json` içindeki komutlardır.
+- Backend için mevcut doğrulama yüzeyi giriş dosyası, import/syntax ve health endpointleridir.
 
-Frontend komutları bu klasörde çalıştırılmalı:
-cd /Users/mert/Vex/vex-app
+## Ek kurallar
+Detaylı ve path-specific kurallar için:
+- `.claude/rules/frontend.md`
+- `.claude/rules/backend.md`
+- `.claude/rules/safety.md`
+- `.claude/rules/verification.md`
 
-Örnek:
-npm run dev
-npm run build
-
-## Backend
-Backend klasörü:
-./vex-backend
-
-Backend komutları bu klasörde çalıştırılmalı:
-cd /Users/mert/Vex/vex-backend
-
-Backend FastAPI/Python yapısındadır. main.py dosyasını kontrol etmeden backend komutu varsayma.
-
-## Çalışma akışı
-1. Önce proje dosya yapısını analiz et.
-2. Frontend ve backend scriptlerini oku.
-3. Kod değiştirmeden önce kısa plan çıkar.
-4. Sadece gerekli dosyaları değiştir.
-5. Değişiklikten sonra build/test çalıştır.
-6. Hata çıkarsa kök sebebi bulup düzelt.
-7. Sonunda değişen dosyaları özetle.
-
-## Özel beklenti
-Bu projede frontend ve backend tek komutla birlikte başlatılabilmeli. Var olan start-vex.sh dosyasını kontrol et. Gerekirse güvenli şekilde düzelt.
+Kısa repo komutları için:
+- `.claude/commands/vex-analyze.md`
+- `.claude/commands/vex-fix.md`
+- `.claude/commands/vex-check.md`

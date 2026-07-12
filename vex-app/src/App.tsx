@@ -184,7 +184,7 @@ type ActiveProjectDetail = {
 };
 
 function App() {
-  const [activeView, setActiveView] = useState<ActiveView>("dashboard");
+  const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [input, setInput] = useState("");
   
   // Evrim Ajanı State'leri
@@ -212,9 +212,12 @@ function App() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isWakeListening, setIsWakeListening] = useState(false);
+  const [isVoiceSessionActive, setIsVoiceSessionActive] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("Lokal mikrofon hazır");
   const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
   const [autoSendVoiceEnabled, setAutoSendVoiceEnabled] = useState(true);
+  const [wakeListenEnabled, setWakeListenEnabled] = useState(true);
 
   const [memoryData, setMemoryData] = useState<MemoryData | null>(null);
   const [isMemoryLoading, setIsMemoryLoading] = useState(false);
@@ -259,6 +262,15 @@ function App() {
   const isTranscribingRef = useRef(false);
   const isSendingRef = useRef(false);
   const isCheckingBackendRef = useRef(false);
+  const isWakeListeningRef = useRef(false);
+  const wakeListenEnabledRef = useRef(true);
+  const wakeLoopRunningRef = useRef(false);
+  const wakeLoopAbortRef = useRef<AbortController | null>(null);
+  const backendStatusRef = useRef<BackendStatus>("checking");
+  const autoSendVoiceEnabledRef = useRef(true);
+  const voiceReplyEnabledRef = useRef(true);
+  const voiceSessionActiveRef = useRef(false);
+  const sendMessageRef = useRef<(messageOverride?: string) => Promise<void>>(async () => {});
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -293,6 +305,76 @@ function App() {
       window.clearInterval(vexReminderInterval);
     };
   }, []);
+
+  useEffect(() => {
+    backendStatusRef.current = backendStatus;
+  }, [backendStatus]);
+
+  useEffect(() => {
+    autoSendVoiceEnabledRef.current = autoSendVoiceEnabled;
+  }, [autoSendVoiceEnabled]);
+
+  useEffect(() => {
+    voiceReplyEnabledRef.current = voiceReplyEnabled;
+  }, [voiceReplyEnabled]);
+
+  useEffect(() => {
+    wakeListenEnabledRef.current = wakeListenEnabled;
+
+    if (!wakeListenEnabled) {
+      wakeLoopAbortRef.current?.abort();
+      updateWakeListening(false);
+    }
+  }, [wakeListenEnabled]);
+
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!wakeListenEnabled || wakeLoopRunningRef.current) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    wakeLoopRunningRef.current = true;
+
+    async function runWakeLoop() {
+      while (!cancelled && wakeListenEnabledRef.current) {
+        const speechIsActive =
+          "speechSynthesis" in window && window.speechSynthesis.speaking;
+
+        if (
+          backendStatusRef.current !== "online" ||
+          isSendingRef.current ||
+          isTranscribingRef.current ||
+          voiceSessionActiveRef.current ||
+          speechIsActive
+        ) {
+          await wait(500);
+          continue;
+        }
+
+        await wakeListenOnce(() => cancelled || !wakeListenEnabledRef.current);
+        await wait(250);
+      }
+
+      wakeLoopRunningRef.current = false;
+      updateWakeListening(false);
+    }
+
+    runWakeLoop();
+
+    return () => {
+      cancelled = true;
+      wakeLoopAbortRef.current?.abort();
+      wakeLoopRunningRef.current = false;
+      updateWakeListening(false);
+    };
+  }, [wakeListenEnabled]);
 
   // Evrim status ve log izleme
   useEffect(() => {
@@ -500,9 +582,67 @@ function App() {
     setIsTranscribing(value);
   }
 
+  function updateWakeListening(value: boolean) {
+    isWakeListeningRef.current = value;
+    setIsWakeListening(value);
+  }
+
+  function updateVoiceSessionActive(value: boolean) {
+    voiceSessionActiveRef.current = value;
+    setIsVoiceSessionActive(value);
+  }
+
   function updateSending(value: boolean) {
     isSendingRef.current = value;
     setIsSending(value);
+  }
+
+  function wait(ms: number) {
+    return new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  async function waitForSpeechPlaybackToFinish(maxMs = 45000) {
+    if (!voiceReplyEnabledRef.current) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    await wait(120);
+
+    while (Date.now() - startedAt <= maxMs) {
+      let speaking = false;
+
+      if (backendStatusRef.current === "online") {
+        try {
+          const response = await fetch("http://127.0.0.1:8000/speech/speaking-status", {
+            cache: "no-store",
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            speaking = Boolean(data?.speaking);
+          }
+        } catch {
+          speaking = false;
+        }
+      } else if ("speechSynthesis" in window) {
+        speaking = window.speechSynthesis.speaking;
+      }
+
+      if (!speaking) {
+        break;
+      }
+
+      if (Date.now() - startedAt > maxMs) {
+        break;
+      }
+
+      await wait(150);
+    }
+
+    await wait(120);
   }
 
   async function checkBackendHealth(options?: { force?: boolean }) {
@@ -554,7 +694,7 @@ function App() {
 
   function getActiveViewLabel() {
     if (activeView === "dashboard") return "Dashboard";
-    if (activeView === "chat") return "Genel sohbet";
+    if (activeView === "chat") return "Vex";
     if (activeView === "memory") return "Hafıza merkezi";
     if (activeView === "projects") return "Proje merkezi";
     if (activeView === "tasks") return "Görev merkezi";
@@ -606,9 +746,44 @@ function App() {
 
 
 
-  function speakText(text: string) {
-    if (!voiceReplyEnabled) {
+  async function speakText(text: string) {
+    if (!voiceReplyEnabledRef.current) {
       return;
+    }
+
+    const cleanedText = cleanTextForSpeech(text);
+
+    if (!cleanedText) {
+      return;
+    }
+
+    stopSpeaking();
+
+    if (backendStatusRef.current === "online") {
+      try {
+        const response = await fetch("http://127.0.0.1:8000/speech/speak", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text: cleanedText }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Backend sesli cevap endpoint'i cevap vermedi.");
+        }
+
+        const data = await response.json();
+
+        if (!data?.success) {
+          throw new Error(data?.message ?? "Sesli cevap başlatılamadı.");
+        }
+
+        setVoiceStatus("Vex sesli cevap veriyor...");
+        return;
+      } catch (error) {
+        console.error("Backend TTS hatası:", error);
+      }
     }
 
     if (!("speechSynthesis" in window)) {
@@ -618,20 +793,22 @@ function App() {
 
     window.speechSynthesis.cancel();
 
-    const utterance = new SpeechSynthesisUtterance(cleanTextForSpeech(text));
-    utterance.lang = "tr-TR";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-
     const voices = window.speechSynthesis.getVoices();
     const turkishVoice =
       voices.find((voice) => voice.lang.toLowerCase().startsWith("tr")) ??
       voices.find((voice) => voice.lang.toLowerCase().includes("tr")) ??
       null;
 
-    if (turkishVoice) {
-      utterance.voice = turkishVoice;
+    if (!turkishVoice) {
+      setVoiceStatus("Türkçe ses bulunamadı. Backend TTS bekleniyor.");
+      return;
     }
+
+    const utterance = new SpeechSynthesisUtterance(cleanedText);
+    utterance.lang = "tr-TR";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.voice = turkishVoice;
 
     utterance.onstart = () => {
       setVoiceStatus("Vex sesli cevap veriyor...");
@@ -649,6 +826,12 @@ function App() {
   }
 
   function stopSpeaking() {
+    if (backendStatusRef.current === "online") {
+      fetch("http://127.0.0.1:8000/speech/stop-speaking", {
+        method: "POST",
+      }).catch(() => undefined);
+    }
+
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
       setVoiceStatus("Sesli cevap durduruldu.");
@@ -769,6 +952,209 @@ function App() {
       lowerText.includes("bu tasarımı") ||
       lowerText.includes("bu tasarimi")
     );
+  }
+
+  function shouldConfirmScreenVisibilityFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    return (
+      lowerText.includes("ekranı görüyor musun") ||
+      lowerText.includes("ekrani goruyor musun") ||
+      lowerText.includes("ekranımı görüyor musun") ||
+      lowerText.includes("ekranimi goruyor musun") ||
+      lowerText.includes("ekranı görebiliyor musun") ||
+      lowerText.includes("ekrani gorebiliyor musun")
+    );
+  }
+
+  function shouldRunComputerTaskFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+
+    if (shouldConfirmScreenVisibilityFromChat(text)) {
+      return false;
+    }
+
+    const computerContextWords = [
+      "bilgisayar",
+      "ekranımda",
+      "ekranimda",
+      "masaüstü",
+      "masaustu",
+      "uygulama",
+      "pencere",
+      "sekme",
+      "tarayıcı",
+      "tarayici",
+      "spotify",
+      "safari",
+      "chrome",
+      "finder",
+      "sesi",
+      "hoparlör",
+      "hoparlor",
+      "volume",
+      "mute",
+    ];
+
+    const actionWords = [
+      "aç",
+      "ac",
+      "kapat",
+      "yap",
+      "başlat",
+      "baslat",
+      "git",
+      "tıkla",
+      "tikla",
+      "yaz",
+      "ara",
+      "arttır",
+      "arttir",
+      "azalt",
+      "kıs",
+      "kis",
+      "sessize al",
+      "göster",
+      "goster",
+    ];
+
+    return (
+      computerContextWords.some((word) => lowerText.includes(word)) &&
+      actionWords.some((word) => lowerText.includes(word))
+    );
+  }
+
+  function parseComputerDirectActionFromChat(text: string) {
+    const lowerText = text.toLocaleLowerCase("tr-TR");
+    const volumeMatch = lowerText.match(/(?:sesi|volume)\s*(?:yüzde|%|seviyesine)?\s*(\d{1,3})/);
+
+    if (
+      lowerText.includes("sessize al") ||
+      lowerText.includes("sesi kapat") ||
+      lowerText.includes("mute")
+    ) {
+      return { action: "mute_toggle", muted: true };
+    }
+
+    if (
+      lowerText.includes("sessizden çıkar") ||
+      lowerText.includes("sessizden cikar") ||
+      lowerText.includes("sesi geri aç") ||
+      lowerText.includes("sesi geri ac")
+    ) {
+      return { action: "mute_toggle", muted: false };
+    }
+
+    if (volumeMatch) {
+      return {
+        action: "set_volume",
+        level: Math.max(0, Math.min(100, Number(volumeMatch[1]))),
+      };
+    }
+
+    if (
+      lowerText.includes("sesi aç") ||
+      lowerText.includes("sesi ac") ||
+      lowerText.includes("sesi arttır") ||
+      lowerText.includes("sesi arttir") ||
+      lowerText.includes("volume up")
+    ) {
+      return { action: "set_volume", level: 70 };
+    }
+
+    if (
+      lowerText.includes("sesi kıs") ||
+      lowerText.includes("sesi kis") ||
+      lowerText.includes("sesi azalt") ||
+      lowerText.includes("volume down")
+    ) {
+      return { action: "set_volume", level: 25 };
+    }
+
+    return null;
+  }
+
+  async function confirmScreenVisibilityFromChat() {
+    const response = await fetch("http://127.0.0.1:8000/computer/screenshot");
+
+    if (!response.ok) {
+      throw new Error("Ekran görüntüsü alınamadı.");
+    }
+
+    return response.json();
+  }
+
+  async function runComputerTaskFromChat(text: string) {
+    const directAction = parseComputerDirectActionFromChat(text);
+
+    if (directAction) {
+      const directResponse = await fetch("http://127.0.0.1:8000/computer/action", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(directAction),
+      });
+
+      if (!directResponse.ok) {
+        throw new Error("Bilgisayar aksiyonu endpoint'i cevap vermedi.");
+      }
+
+      return directResponse.json();
+    }
+
+    const response = await fetch("http://127.0.0.1:8000/computer/task", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        instruction: text,
+        mode: "autonomous",
+        max_steps: 20,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Bilgisayar görevi endpoint hatası: HTTP ${response.status}: ${errorText}`);
+    }
+
+    return response.json();
+  }
+
+  function buildComputerTaskReply(result: any) {
+    if (!result?.success) {
+      return result?.message || "Bilgisayar görevini tamamlayamadım Mert.";
+    }
+
+    if (result?.question) {
+      return result.question;
+    }
+
+    if (result?.reply) {
+      return result.reply;
+    }
+
+    if (result?.action === "set_volume") {
+      return `Tamam Mert, sesi yüzde ${result.level} yaptım.`;
+    }
+
+    if (result?.action === "mute_toggle") {
+      return result.muted
+        ? "Tamam Mert, sesi kapattım."
+        : "Tamam Mert, sesi tekrar açtım.";
+    }
+
+    if (result?.message === "Görev tamamlandı") {
+      return "Tamam Mert, bilgisayarında istediğin işlemi yaptım.";
+    }
+
+    if (result?.message === "Maksimum adıma ulaşıldı") {
+      return "İşlemi büyük ölçüde yürüttüm ama maksimum adım sınırına ulaştım; istersen devam edebilirim.";
+    }
+
+    return result?.message || "Tamam Mert, bilgisayar görevini yürüttüm.";
   }
 
   function shouldCreateProjectFromChat(text: string) {
@@ -1862,6 +2248,12 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
       if (data?.success && data?.text) {
         const cleanedText = cleanTranscribedText(data.text);
+
+        if (!cleanedText) {
+          setVoiceStatus("Konuşma algılandı ama anlamlı metin çıkarılamadı.");
+          return;
+        }
+
         setInput(cleanedText);
         setVoiceStatus(`Ses metne çevrildi: ${cleanedText}`);
 
@@ -1870,6 +2262,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
           await sendMessage(cleanedText);
         }
       } else {
+        if (data?.reason === "no_speech" || data?.reason === "empty_transcription") {
+          setVoiceStatus(data?.message ?? "Konuşma algılanmadı; sessizlik yok sayıldı.");
+          return;
+        }
+
         setVoiceStatus(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
         alert(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
       }
@@ -1886,7 +2283,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
 
   async function listenAndTranscribe() {
-    if (isRecordingRef.current || isSendingRef.current || isTranscribingRef.current) {
+    if (isRecordingRef.current || isWakeListeningRef.current || isSendingRef.current || isTranscribingRef.current) {
       return;
     }
 
@@ -1908,9 +2305,9 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         },
         body: JSON.stringify({
           max_seconds: 20,
-          silence_seconds: 0.45,
-          peak_threshold: 0.06,
-          average_threshold: 0.008,
+          silence_seconds: 0.8,
+          peak_threshold: 0.075,
+          average_threshold: 0.012,
         }),
       });
 
@@ -1926,6 +2323,12 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
 
       if (data?.success && data?.text) {
         const cleanedText = cleanTranscribedText(data.text);
+
+        if (!cleanedText) {
+          setVoiceStatus("Konuşma algılandı ama anlamlı metin çıkarılamadı.");
+          return;
+        }
+
         setInput(cleanedText);
         setVoiceStatus(`Ses metne çevrildi: ${cleanedText}`);
 
@@ -1934,6 +2337,11 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
           await sendMessage(cleanedText);
         }
       } else {
+        if (data?.reason === "no_speech" || data?.reason === "empty_transcription") {
+          setVoiceStatus(data?.message ?? "Konuşma algılanmadı; sessizlik yok sayıldı.");
+          return;
+        }
+
         setVoiceStatus(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
         alert(data?.message ?? "Ses algılandı ama metin çıkarılamadı.");
       }
@@ -1946,6 +2354,163 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
       updateTranscribing(false);
       setBusyState(false);
       await checkBackendHealth({ force: true });
+    }
+  }
+
+  async function wakeListenOnce(shouldCancel: () => boolean) {
+    if (
+      shouldCancel() ||
+      isRecordingRef.current ||
+      isWakeListeningRef.current ||
+      isSendingRef.current ||
+      isTranscribingRef.current ||
+      voiceSessionActiveRef.current ||
+      backendStatusRef.current !== "online"
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    wakeLoopAbortRef.current = controller;
+
+    updateWakeListening(true);
+    updateRecording(true);
+    setBusyState(true);
+    setVoiceStatus("Vex kelimesini bekliyorum. 'Vex' deyince aktif dinlemeye geçeceğim.");
+
+    try {
+      const wakeResponse = await fetch("http://127.0.0.1:8000/speech/wake/detect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          wake_seconds: 4,
+          peak_threshold: 0.075,
+          average_threshold: 0.012,
+        }),
+      });
+
+      if (shouldCancel()) {
+        return;
+      }
+
+      if (!wakeResponse.ok) {
+        throw new Error("Uyandırma endpoint'i cevap vermedi.");
+      }
+
+      const wakeData = await wakeResponse.json();
+
+      if (shouldCancel()) {
+        return;
+      }
+
+      if (!wakeData?.wake_detected) {
+        setVoiceStatus("Vex kelimesini bekliyorum...");
+        return;
+      }
+
+      updateVoiceSessionActive(true);
+      updateRecording(false);
+      setVoiceStatus("Vex uyandı. Efendim diyorum, sonra komutunu dinleyeceğim.");
+      await speakText("Efendim");
+      await waitForSpeechPlaybackToFinish(8000);
+
+      let pendingCommand = "";
+
+      while (!shouldCancel()) {
+        if (pendingCommand) {
+          updateRecording(false);
+          setInput(pendingCommand);
+          setVoiceStatus(`Vex komutu aldı: ${pendingCommand}`);
+
+          if (autoSendVoiceEnabledRef.current) {
+            setVoiceStatus(`Vex komutu gönderiyor: ${pendingCommand}`);
+            await sendMessageRef.current(pendingCommand);
+            await waitForSpeechPlaybackToFinish();
+          } else {
+            break;
+          }
+
+          pendingCommand = "";
+        }
+
+        if (shouldCancel()) {
+          return;
+        }
+
+        updateRecording(true);
+        setVoiceStatus("Seni dinliyorum. Konuşmayı bitirince cevap vereceğim; 10 saniye sessizlikte bekleme moduna dönerim.");
+
+        const activeResponse = await fetch("http://127.0.0.1:8000/speech/wake/active-listen", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            active_silence_seconds: 10,
+            max_active_seconds: 90,
+            peak_threshold: 0.04,
+            average_threshold: 0.006,
+          }),
+        });
+
+        if (shouldCancel()) {
+          return;
+        }
+
+        updateRecording(false);
+
+        if (!activeResponse.ok) {
+          throw new Error("Aktif dinleme endpoint'i cevap vermedi.");
+        }
+
+        const activeData = await activeResponse.json();
+
+        if (shouldCancel()) {
+          return;
+        }
+
+        if (activeData?.success && activeData?.text) {
+          const cleanedText = cleanTranscribedText(activeData.text);
+
+          if (!cleanedText) {
+            setVoiceStatus("Vex uyandı ama anlamlı komut çıkarılamadı.");
+            break;
+          }
+
+          pendingCommand = cleanedText;
+          continue;
+        }
+
+        if (activeData?.reason === "no_command" || activeData?.reason === "empty_transcription") {
+          setVoiceStatus("10 saniye sessizlik oldu. Vex bekleme moduna döndü.");
+          break;
+        }
+
+        setVoiceStatus(activeData?.message ?? "Vex bekleme moduna döndü.");
+        break;
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      console.error("Uyandırmalı dinleme hatası:", error);
+      setVoiceStatus("Uyandırmalı dinleme hata verdi. Backend ve mikrofonu kontrol edelim.");
+      await checkBackendHealth({ force: true });
+      await wait(1000);
+    } finally {
+      if (wakeLoopAbortRef.current === controller) {
+        wakeLoopAbortRef.current = null;
+      }
+
+      updateRecording(false);
+      updateWakeListening(false);
+      updateVoiceSessionActive(false);
+      setBusyState(false);
     }
   }
 
@@ -1993,8 +2558,14 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
-    if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !messageOverride)) {
+    if (!cleanInput || isSendingRef.current || (isRecordingRef.current && !isWakeListeningRef.current && !messageOverride)) {
       return;
+    }
+
+    if (isWakeListeningRef.current && !messageOverride) {
+      wakeLoopAbortRef.current?.abort();
+      updateWakeListening(false);
+      updateRecording(false);
     }
 
     if (backendStatus === "offline") {
@@ -2088,6 +2659,60 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
             id: Date.now() + 2,
             sender: "Vex",
             text: `Site analizi yaparken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
+
+      if (shouldConfirmScreenVisibilityFromChat(cleanInput)) {
+        try {
+          const screenVisibilityResult = await confirmScreenVisibilityFromChat();
+          const screenReplyText = screenVisibilityResult?.success
+            ? "Evet Mert, ekranını görüyorum."
+            : screenVisibilityResult?.message || "Şu an ekranını göremiyorum Mert.";
+          const screenReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: screenReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, screenReply]);
+          speakText(screenReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Ekranı kontrol ederken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          setMessages((currentMessages) => [...currentMessages, errorReply]);
+        } finally {
+          setIsTyping(false);
+          updateSending(false);
+          setBusyState(false);
+        }
+        return;
+      }
+
+      if (shouldRunComputerTaskFromChat(cleanInput)) {
+        try {
+          const computerTaskResult = await runComputerTaskFromChat(cleanInput);
+          const computerReplyText = buildComputerTaskReply(computerTaskResult);
+          const computerReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: computerReplyText,
+          };
+          setMessages((currentMessages) => [...currentMessages, computerReply]);
+          speakText(computerReplyText);
+        } catch (error) {
+          const errorReply: Message = {
+            id: Date.now() + 2,
+            sender: "Vex",
+            text: `Bilgisayar görevini yürütürken hata aldım Mert: ${error instanceof Error ? error.message : String(error)}`,
           };
           setMessages((currentMessages) => [...currentMessages, errorReply]);
         } finally {
@@ -2474,6 +3099,57 @@ Durum: ${outputResult.output.status}
     }
   }
 
+  const voiceMode = backendStatus === "offline"
+    ? "offline"
+    : isRecording
+      ? isVoiceSessionActive
+        ? "listening"
+        : isWakeListening
+          ? "wake-listening"
+          : "listening"
+      : isTranscribing
+        ? "transcribing"
+        : voiceStatus.toLocaleLowerCase("tr-TR").includes("sesli cevap veriyor")
+          ? "speaking"
+          : isVoiceSessionActive
+            ? "conversation"
+            : isWakeListening
+              ? "wake-listening"
+              : "ready";
+  const voicePrimaryLabel = voiceMode === "offline"
+    ? "Ses çevrimdışı"
+    : voiceMode === "wake-listening"
+      ? "Vex'i bekliyorum"
+    : voiceMode === "conversation"
+      ? "Sohbet açık"
+    : voiceMode === "listening"
+      ? "Dinliyorum"
+      : voiceMode === "transcribing"
+        ? "Yazıya çeviriyorum"
+        : voiceMode === "speaking"
+          ? "Vex konuşuyor"
+          : "Sesli görüşmeye hazır";
+  const voiceActionLabel = voiceMode === "listening"
+    ? "Dinleniyor..."
+    : voiceMode === "wake-listening"
+      ? "Vex bekleniyor..."
+    : voiceMode === "conversation"
+      ? "Sohbet açık"
+    : voiceMode === "transcribing"
+      ? "Çevriliyor..."
+      : voiceMode === "offline"
+        ? "Backend kapalı"
+        : "Konuşmaya başla";
+  const voiceHint = voiceMode === "ready"
+    ? wakeListenEnabled
+      ? "'Vex' deyince otomatik uyanır; sonra 10 saniye dinler, yeni söz duyarsa süre resetlenir."
+      : "Mikrofona bas; sessizlikte otomatik durur ve mesajı hazırlar."
+    : voiceMode === "conversation"
+      ? "Vex oturumu açık. Sen konuşmayı bıraktığında cevap veririm; 10 saniye sessizlikte yeniden bekleme moduna dönerim."
+    : voiceMode === "offline"
+      ? "Sesli görüşme için backend bağlantısı gerekiyor."
+      : voiceStatus;
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -2487,17 +3163,17 @@ Durum: ${outputResult.output.status}
 
         <nav className="nav-list">
           <button
+            className={`nav-item ${activeView === "chat" ? "active" : ""}`}
+            onClick={() => setActiveView("chat")}
+          >
+            Vex
+          </button>
+
+          <button
             className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
             onClick={openDashboardView}
           >
             Dashboard
-          </button>
-
-          <button
-            className={`nav-item ${activeView === "chat" ? "active" : ""}`}
-            onClick={() => setActiveView("chat")}
-          >
-            Genel Sohbet
           </button>
 
           <button
@@ -2844,45 +3520,17 @@ Durum: ${outputResult.output.status}
           <>
             <header className="topbar">
               <div>
-                <p className="eyebrow">Kişisel yapay zeka iş arkadaşın</p>
-                <h2>Vex ile sohbet et</h2>
+                <p className="eyebrow">Ana sekme</p>
+                <h2>Vex</h2>
               </div>
 
-              <div className="topbar-actions">
-                <button
-                  className="small-action-button"
-                  type="button"
-                  onClick={() => setAutoSendVoiceEnabled((value) => !value)}
-                >
-                  Otomatik Gönder: {autoSendVoiceEnabled ? "Açık" : "Kapalı"}
-                </button>
-
-                <button
-                  className="small-action-button"
-                  type="button"
-                  onClick={() => setVoiceReplyEnabled((value) => !value)}
-                >
-                  Sesli Cevap: {voiceReplyEnabled ? "Açık" : "Kapalı"}
-                </button>
-
-                <button
-                  className="small-action-button"
-                  type="button"
-                  onClick={stopSpeaking}
-                >
-                  Sesi Durdur
-                </button>
-
+              <div className="topbar-actions compact-actions">
                 <span className={`status-pill backend-${backendStatus === "checking" ? "online" : backendStatus}`}>
                   {getBackendLabel()}
                 </span>
 
-                <span className="status-pill">
-                  {isRecording
-                    ? "Kayıt alınıyor..."
-                    : isTranscribing
-                      ? "Yazıya çevriliyor..."
-                      : "Otomatik dinleme aktif"}
+                <span className={`status-pill voice-status-pill voice-${voiceMode}`}>
+                  {voicePrimaryLabel}
                 </span>
               </div>
             </header>
@@ -2905,40 +3553,112 @@ Durum: ${outputResult.output.status}
               ) : null}
             </div>
 
-            <div className="composer">
-              <button
-                className={`mic-button ${isRecording ? "recording" : ""}`}
-                type="button"
-                onClick={listenAndTranscribe}
-                disabled={isSending || isTranscribing || backendStatus === "offline"}
-                title="Konuş; sessizlikte otomatik durur"
-              >
-                {isRecording ? "Dinliyor..." : isTranscribing ? "Çevriliyor..." : "Mikrofon"}
-              </button>
+            <div className={`composer voice-composer voice-${voiceMode}`}>
+              <section className="voice-dock" aria-label="Vex sesli görüşme paneli">
+                <button
+                  className="voice-orb-button"
+                  type="button"
+                  onClick={listenAndTranscribe}
+                  disabled={isSending || isTranscribing || backendStatus === "offline"}
+                  title="Konuş; sessizlikte otomatik durur"
+                  aria-label="Vex ile sesli görüşmeyi başlat"
+                >
+                  <span className="voice-orb-rings" aria-hidden="true" />
+                  <span className="voice-orb-core">
+                    <span className="voice-orb-icon">🎙</span>
+                  </span>
+                </button>
 
-              <input
-                placeholder="Vex'e bir şey yaz veya mikrofonla konuş..."
-                value={input}
-                disabled={isSending || isRecording || isTranscribing}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    sendMessage();
+                <div className="voice-dock-content">
+                  <div className="voice-dock-header">
+                    <div>
+                      <p className="voice-kicker">Vex Voice Dock</p>
+                      <strong>{voicePrimaryLabel}</strong>
+                    </div>
+                    <span className="voice-live-chip">{autoSendVoiceEnabled ? "Auto-send" : "Taslak"}</span>
+                  </div>
+
+                  <p className="voice-dock-status">{voiceHint}</p>
+
+                  <div className="voice-wave" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+
+                  <div className="voice-controls">
+                    <button
+                      className={`voice-chip ${autoSendVoiceEnabled ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setAutoSendVoiceEnabled((value) => !value)}
+                    >
+                      Otomatik gönder {autoSendVoiceEnabled ? "açık" : "kapalı"}
+                    </button>
+
+                    <button
+                      className={`voice-chip ${voiceReplyEnabled ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setVoiceReplyEnabled((value) => !value)}
+                    >
+                      Sesli cevap {voiceReplyEnabled ? "açık" : "kapalı"}
+                    </button>
+
+                    <button
+                      className={`voice-chip ${wakeListenEnabled ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setWakeListenEnabled((value) => !value)}
+                    >
+                      “Vex” ile uyanma {wakeListenEnabled ? "açık" : "kapalı"}
+                    </button>
+
+                    <button
+                      className="voice-chip ghost"
+                      type="button"
+                      onClick={stopSpeaking}
+                    >
+                      Sesi durdur
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <div className="text-composer-row">
+                <input
+                  placeholder="Vex'e yaz veya Voice Dock ile konuş..."
+                  value={input}
+                  disabled={isSending || (isRecording && !isWakeListening) || isTranscribing}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      sendMessage();
+                    }
+                  }}
+                />
+
+                <button
+                  className="voice-primary-action"
+                  type="button"
+                  onClick={listenAndTranscribe}
+                  disabled={isSending || isTranscribing || backendStatus === "offline"}
+                >
+                  {voiceActionLabel}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => sendMessage()}
+                  disabled={
+                    isSending ||
+                    (isRecording && !isWakeListening) ||
+                    isTranscribing ||
+                    backendStatus === "offline"
                   }
-                }}
-              />
-
-              <button
-                onClick={() => sendMessage()}
-                disabled={
-                  isSending ||
-                  isRecording ||
-                  isTranscribing ||
-                  backendStatus === "offline"
-                }
-              >
-                {isSending ? "Düşünüyor..." : "Gönder"}
-              </button>
+                >
+                  {isSending ? "Düşünüyor..." : "Gönder"}
+                </button>
+              </div>
             </div>
           </>
         ) : null}
@@ -3564,7 +4284,7 @@ Durum: ${outputResult.output.status}
                 <span className={`status-pill backend-${isEvolutionRunning ? "offline" : "online"}`}>
                   {isEvolutionRunning ? "Evrim Çalışıyor..." : "Evrim Hazır"}
                 </span>
-                <span className="status-pill backend-online" style={{ background: "rgba(16, 151, 65, 0.2)", color: "#109741" }}>
+                <span className="status-pill backend-online" style={{ background: "rgba(31, 111, 224, 0.2)", color: "#1f5fd1" }}>
                   GÜVENLİ MOD AKTİF
                 </span>
               </div>
@@ -3607,7 +4327,7 @@ Durum: ${outputResult.output.status}
                       {action.replacement && (
                         <div style={{ marginTop: "10px" }}>
                           <p style={{ fontSize: "12px", color: "#8d96aa", marginBottom: "5px" }}><strong>Yapılacak Değişiklik:</strong></p>
-                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#16c766", overflowX: "auto", borderLeft: "3px solid #16c766" }}>
+                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#2f8dff", overflowX: "auto", borderLeft: "3px solid #2f8dff" }}>
                             <code>{action.replacement}</code>
                           </pre>
                         </div>
@@ -3616,7 +4336,7 @@ Durum: ${outputResult.output.status}
                       {action.after_content && (
                         <div style={{ marginTop: "10px" }}>
                           <p style={{ fontSize: "12px", color: "#8d96aa", marginBottom: "5px" }}><strong>Yazılacak Yeni İçerik:</strong></p>
-                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#16c766", overflowX: "auto", borderLeft: "3px solid #16c766", maxHeight: "150px" }}>
+                          <pre style={{ background: "rgba(16,151,65,0.08)", padding: "10px", borderRadius: "5px", fontSize: "11px", color: "#2f8dff", overflowX: "auto", borderLeft: "3px solid #2f8dff", maxHeight: "150px" }}>
                             <code>{action.after_content}</code>
                           </pre>
                         </div>
@@ -3627,7 +4347,7 @@ Durum: ${outputResult.output.status}
                           onClick={() => approveEvolutionAction(action.id)}
                           style={{
                             flex: 1, padding: "10px", borderRadius: "8px", border: 0,
-                            background: "#109741", color: "white", fontWeight: "bold", cursor: "pointer"
+                            background: "#1f5fd1", color: "white", fontWeight: "bold", cursor: "pointer"
                           }}
                         >
                           İşlemi Onayla ve Çalıştır
@@ -3677,7 +4397,7 @@ Durum: ${outputResult.output.status}
                       padding: "12px 24px",
                       borderRadius: "10px",
                       border: 0,
-                      background: isEvolutionRunning ? "#e05e5e" : "#109741",
+                      background: isEvolutionRunning ? "#e05e5e" : "#1f5fd1",
                       color: "white",
                       fontWeight: "bold",
                       cursor: isEvolutionRunning ? "not-allowed" : "pointer"
@@ -3737,7 +4457,7 @@ Durum: ${outputResult.output.status}
                 <span className={`status-pill backend-${computerUseRunning ? "offline" : "online"}`}>
                   {computerUseRunning ? "Görev Çalışıyor..." : "Hazır"}
                 </span>
-                <span className="status-pill backend-online" style={{ background: "rgba(16, 151, 65, 0.2)", color: "#109741" }}>
+                <span className="status-pill backend-online" style={{ background: "rgba(31, 111, 224, 0.2)", color: "#1f5fd1" }}>
                   pyautogui aktif
                 </span>
               </div>
@@ -3760,7 +4480,7 @@ Durum: ${outputResult.output.status}
                 </div>
                 <div>
                   <p className="panel-label" style={{ margin: 0 }}>Son Aksiyon</p>
-                  <strong style={{ fontSize: "14px", color: "#16c766" }}>
+                  <strong style={{ fontSize: "14px", color: "#2f8dff" }}>
                     {lastComputerAction}
                   </strong>
                 </div>
@@ -3811,7 +4531,7 @@ Durum: ${outputResult.output.status}
                         }}
                         style={{
                           flex: 1, padding: "10px", borderRadius: "8px", border: 0,
-                          background: "#109741", color: "white", fontWeight: "bold", cursor: "pointer"
+                          background: "#1f5fd1", color: "white", fontWeight: "bold", cursor: "pointer"
                         }}
                       >
                         Bu Adımı Uygula
@@ -3899,7 +4619,7 @@ Durum: ${outputResult.output.status}
                 )}
 
                 {computerAnalysis && (
-                  <div className="panel-card" style={{ marginBottom: "15px", background: "rgba(16,151,65,0.08)", borderLeft: "3px solid #16c766" }}>
+                  <div className="panel-card" style={{ marginBottom: "15px", background: "rgba(16,151,65,0.08)", borderLeft: "3px solid #2f8dff" }}>
                     <p className="panel-label">AI Ekran Analizi</p>
                     <p style={{ whiteSpace: "pre-wrap" }}>{computerAnalysis}</p>
                   </div>
@@ -3953,7 +4673,7 @@ Durum: ${outputResult.output.status}
                       padding: "12px 24px",
                       borderRadius: "10px",
                       border: 0,
-                      background: "#109741",
+                      background: "#1f5fd1",
                       color: "white",
                       fontWeight: "bold",
                       cursor: computerUseRunning ? "not-allowed" : "pointer"
@@ -4084,19 +4804,22 @@ Durum: ${outputResult.output.status}
           <strong>Gemini API aktif</strong>
         </div>
 
-        <div className="panel-card">
-          <p className="panel-label">Ses algılama</p>
-          <strong>{voiceStatus}</strong>
-        </div>
+        <div className={`panel-card voice-summary-card voice-${voiceMode}`}>
+          <div className="voice-summary-header">
+            <div>
+              <p className="panel-label">Sesli görüşme</p>
+              <strong>{voicePrimaryLabel}</strong>
+            </div>
+            <span className="voice-summary-dot" />
+          </div>
 
-        <div className="panel-card">
-          <p className="panel-label">Sesli cevap</p>
-          <strong>{voiceReplyEnabled ? "Açık" : "Kapalı"}</strong>
-        </div>
+          <p className="voice-summary-status">{voiceStatus}</p>
 
-        <div className="panel-card">
-          <p className="panel-label">Otomatik gönder</p>
-          <strong>{autoSendVoiceEnabled ? "Açık" : "Kapalı"}</strong>
+          <div className="voice-summary-badges">
+            <span>{voiceReplyEnabled ? "Sesli cevap açık" : "Sesli cevap kapalı"}</span>
+            <span>{autoSendVoiceEnabled ? "Otomatik gönder açık" : "Otomatik gönder kapalı"}</span>
+            <span>{wakeListenEnabled ? "Vex ile uyanma açık" : "Vex ile uyanma kapalı"}</span>
+          </div>
         </div>
       </aside>
     </main>
