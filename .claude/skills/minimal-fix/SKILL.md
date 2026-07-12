@@ -1,75 +1,40 @@
 ---
 name: minimal-fix
-description: Mevcut kodda en küçük güvenli değişiklikle hata veya dar kapsamlı görev çözümü yapar.
-argument-hint: "[çözülecek sorun]"
-disable-model-invocation: true
-disallowed-tools: Agent
+description: Bir hatayı mümkün olan en küçük, güvenli ve doğrulanabilir değişiklikle düzeltir.
 ---
 
-# Minimal Fix Mode
+# Minimal Fix
 
-Görev:
+Bir hata veya küçük kapsamlı sorun çözülürken bu skill kullanılmalıdır.
 
-$ARGUMENTS
+## Amaç
 
-Bu görevde minimum değişiklik yaklaşımı zorunludur.
+Sorunu gideren en küçük değişikliği uygulamak; ilgisiz refactor, yeniden adlandırma,
+formatlama veya mimari değişiklik yapmamak.
 
-## Çalışma sırası
+## Zorunlu Akış
 
-1. Önce `git status --short` çalıştır.
-2. Kullanıcının mevcut değişikliklerini tespit et ve koru.
-3. İlgili dosyaları bul.
-4. Sorunun kök nedenini belirle.
-5. Mevcut kodla çözülebilen en küçük çözümü seç.
-6. Sadece gerekli satırları değiştir.
-7. İlgili test veya build komutunu çalıştır.
-8. `git diff --check` çalıştır.
-9. `git diff --stat` çalıştır.
-10. Diff'i incele ve gereksiz değişiklikleri geri al.
+1. Sorunu ve beklenen davranışı tanımla.
+2. Etkilenen dosyaları oku.
+3. Kök nedeni belirle.
+4. En küçük güvenli değişikliği uygula.
+5. İlgili testleri ve syntax kontrollerini çalıştır.
+6. `git diff --check` çalıştır.
+7. Değişen dosyaları ve doğrulama sonucunu raporla.
 
-## Kesin sınırlar
+## Sınırlar
 
-Kullanıcı daha geniş kapsamı açıkça istemediyse:
-
-- En fazla 3 dosya değiştir.
-- En fazla 150 eklenen/silinen satır.
-- En fazla 1 yeni dosya.
+- İlgisiz dosyaları değiştirme.
+- Test silerek veya gevşeterek başarı sağlama.
+- Hata çıktısını gizleme.
 - Yeni dependency ekleme.
-- Yeni abstraction oluşturma.
-- İlgisiz refactor yapma.
-- Dosya taşımama veya isim değiştirmeme.
-- Toplu formatlama yapmama.
-- Agent veya subagent başlatmama.
-- Gelecekte kullanılabilecek kod yazmama.
+- `.env`, secret, token veya credential dosyalarını okuma.
+- Push, deploy, force push, rebase veya destructive Git işlemi yapma.
+- Kullanıcı onayı olmadan dış sistemlerde geri döndürülemez işlem yapma.
 
-Limit aşılması gerekiyorsa herhangi bir dosyayı değiştirmeden önce dur ve nedenini açıkla.
+## Başarı Ölçütü
 
-## Karar kriteri
-
-İki çözüm aynı sonucu sağlıyorsa:
-
-- Daha az dosya değiştiren,
-- Daha az satır ekleyen,
-- Mevcut yapıyı kullanan,
-- Daha kolay geri alınabilen
-
-çözümü seç.
-
-## Son rapor
-
-Yalnızca şu formatı kullan:
-
-Kök neden:
-- ...
-
-Düzeltme:
-- ...
-
-Değişen dosyalar:
-- ...
-
-Doğrulama:
-- ...
-
-Diff:
-- ... dosya, ... ekleme, ... silme
+- Sorun yeniden üretilebilir şekilde giderilmiş olmalı.
+- Mevcut davranış gereksiz yere değiştirilmemeli.
+- İlgili testler geçmeli.
+- Diff küçük, anlaşılır ve geri alınabilir olmalı.
