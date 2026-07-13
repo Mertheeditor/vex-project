@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.schemas.seo import SeoAuditRequest, SeoSiteSignals, SeoSiteSignals
+from app.schemas.seo import SeoAuditRequest, SeoSiteSignals
 from app.services.seo_service import (
     FetchResult,
     SeoAuditError,

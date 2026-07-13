@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
 
 from app.schemas.seo import (
     IssueSeverity,
@@ -47,6 +47,20 @@ class FetchResult:
     content_type: str
     body: bytes
     final_url: str
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Disable urllib automatic redirects so every Location is validated first."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Disable urllib automatic redirects so every Location is validated first."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
 
 
 class SeoHtmlParser(HTMLParser):
@@ -114,9 +128,11 @@ class SeoCrawler:
         self,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         max_response_bytes: int = MAX_RESPONSE_BYTES,
+        opener: OpenerDirector | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
+        self.opener = opener or build_opener(NoRedirectHandler)
 
     async def crawl(self, start_url: str, max_pages: int = DEFAULT_MAX_PAGES) -> tuple[list[FetchResult], list[str], SeoSiteSignals]:
         capped_max_pages = min(max_pages, HARD_MAX_PAGES)
@@ -178,14 +194,17 @@ class SeoCrawler:
 
     def _fetch_sync(self, url: str) -> FetchResult:
         current = url
+        root_host = urlparse(url).hostname or ""
         for _ in range(6):
             self.validate_public_url(current)
             request = Request(current, headers={"User-Agent": USER_AGENT})
             try:
-                response = urlopen(request, timeout=self.timeout_seconds)
+                response = self.opener.open(request, timeout=self.timeout_seconds)
                 status = getattr(response, "status", 200)
-                final_url = getattr(response, "url", current)
+                final_url = normalize_url(getattr(response, "url", current))
                 self.validate_public_url(final_url)
+                if not same_registered_host(root_host, urlparse(final_url).hostname or ""):
+                    raise SeoAuditError(f"Redirect left domain: {current} -> {final_url}")
                 content_type = response.headers.get("Content-Type", "")
                 body = response.read(self.max_response_bytes + 1)
                 if len(body) > self.max_response_bytes:
@@ -202,7 +221,11 @@ class SeoCrawler:
                     location = exc.headers.get("Location")
                     if not location:
                         raise SeoAuditError(f"Redirect missing location: {current}") from exc
-                    current = normalize_url(urljoin(current, location))
+                    next_url = normalize_url(urljoin(current, location))
+                    self.validate_public_url(next_url)
+                    if not same_registered_host(root_host, urlparse(next_url).hostname or ""):
+                        raise SeoAuditError(f"Redirect left domain: {current} -> {next_url}") from exc
+                    current = next_url
                     continue
                 body = exc.read(min(self.max_response_bytes, 8192))
                 return FetchResult(
@@ -317,12 +340,9 @@ class SeoAuditService:
         return render_markdown(self.get_audit(audit_id))
 
     async def _optional_ai_recommendations(self, enabled: bool) -> list[SeoRecommendation]:
-        if not enabled:
-            return []
-        try:
-            return []
-        except Exception:
-            return []
+        if enabled:
+            raise SeoAuditError("AI recommendations are not available in this MVP")
+        return []
 
 
 def normalize_url(url: str) -> str:
@@ -373,8 +393,8 @@ def is_blocked_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> boo
 
 
 def same_registered_host(root_host: str, candidate_host: str) -> bool:
-    root = root_host.lower().lstrip("www.")
-    candidate = candidate_host.lower().lstrip("www.")
+    root = root_host.lower().removeprefix("www.")
+    candidate = candidate_host.lower().removeprefix("www.")
     return candidate == root
 
 
@@ -391,7 +411,10 @@ def extract_anchor_links(parser: SeoHtmlParser, base_url: str, root_host: str) -
         href = link.get("href", "").strip()
         if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
             continue
-        absolute = normalize_url(urljoin(base_url, href))
+        try:
+            absolute = normalize_url(urljoin(base_url, href))
+        except SeoAuditError:
+            continue
         if same_registered_host(root_host, urlparse(absolute).hostname or ""):
             links.append(absolute)
     return list(dict.fromkeys(links))
@@ -424,7 +447,10 @@ def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
         href = link["href"]
         if href.startswith(("#", "mailto:", "tel:", "javascript:")):
             continue
-        absolute = normalize_url(urljoin(base_url, href))
+        try:
+            absolute = normalize_url(urljoin(base_url, href))
+        except SeoAuditError:
+            continue
         if same_registered_host(root_host, urlparse(absolute).hostname or ""):
             internal_links.append(absolute)
         else:
@@ -645,7 +671,10 @@ def first_meta(parser: SeoHtmlParser, name: str) -> str:
 def first_link(parser: SeoHtmlParser, rel: str, base_url: str) -> str:
     for link in parser.links:
         if link.get("rel", "").lower() == rel.lower() and link.get("href"):
-            return normalize_url(urljoin(base_url, link["href"]))
+            try:
+                return normalize_url(urljoin(base_url, link["href"]))
+            except SeoAuditError:
+                return ""
     return ""
 
 
