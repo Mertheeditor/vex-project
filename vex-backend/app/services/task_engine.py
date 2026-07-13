@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from app.core.paths import APPROVALS_PATH
-from app.schemas.agent_kernel import AgentResult, AgentTask
+from app.schemas.agent_kernel import AgentContext, AgentResult, AgentTask
 from app.schemas.task_engine import AgentTaskRecord, AgentTaskStatus, TERMINAL_TASK_STATUSES
+from app.services.agent_kernel import BaseAgent
 from app.storage.entity_store import list_items
 
 ALLOWED_TRANSITIONS: dict[AgentTaskStatus, set[AgentTaskStatus]] = {
@@ -74,10 +75,7 @@ def _get_linked_task_id(approval: dict) -> str | None:
 
 
 def _check_approval_gate(task_id: str, task_risk: str) -> None:
-    """Enforce approval gate for WAITING_APPROVAL -> RUNNING transition.
-
-    Raises ValueError if the transition should be blocked.
-    """
+    """Enforce approval gate for every transition into RUNNING."""
     risk = _normalize_risk(task_risk)
 
     if risk == "black":
@@ -99,8 +97,11 @@ def _check_approval_gate(task_id: str, task_risk: str) -> None:
     if has_rejected:
         raise ValueError(f"Task '{task_id}' has a rejected approval")
 
-    has_approved = any(a.get("status") == "onaylandı" for a in linked_approvals)
-    if not has_approved:
+    has_matching_approval = any(
+        a.get("status") == "onaylandı" and _normalize_risk(a.get("risk_level")) == risk
+        for a in linked_approvals
+    )
+    if not has_matching_approval:
         raise ValueError(f"Task '{task_id}' requires an approved approval for risk level '{risk}'")
 
 
@@ -150,7 +151,7 @@ class TaskEngine:
         if new_status not in allowed:
             raise ValueError(f"Invalid transition for task '{task_id}': {record.status.value} -> {new_status.value}.")
 
-        if record.status == AgentTaskStatus.WAITING_APPROVAL and new_status == AgentTaskStatus.RUNNING:
+        if new_status == AgentTaskStatus.RUNNING:
             risk = record.metadata.get("risk_level")
             _check_approval_gate(task_id, str(risk) if risk is not None else "")
 
@@ -162,6 +163,35 @@ class TaskEngine:
         if new_status in TERMINAL_TASK_STATUSES:
             record.completed_at = now
         return record
+
+    async def execute_task(
+        self,
+        task_id: str,
+        agent: BaseAgent,
+        context: AgentContext,
+    ) -> AgentResult:
+        """Run an agent task after enforcing approval-gated execution rules."""
+        record = self.get_task(task_id)
+        if record.status == AgentTaskStatus.RUNNING and record.started_at is not None:
+            raise ValueError(f"Task '{task_id}' is already running.")
+        if record.status in TERMINAL_TASK_STATUSES:
+            raise ValueError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
+        if record.status != AgentTaskStatus.WAITING_APPROVAL:
+            raise ValueError(
+                f"Task '{task_id}' must be waiting_approval before execution, "
+                f"not '{record.status.value}'."
+            )
+
+        self.transition(task_id, AgentTaskStatus.RUNNING)
+        task = AgentTask(
+            task_id=record.task_id,
+            objective=record.objective,
+            context=dict(record.metadata),
+            requested_by=str(record.metadata.get("requested_by") or "system"),
+        )
+        result = await agent.execute(task, context)
+        self.set_result(task_id, result)
+        return result
 
     def assign_agent(self, task_id: str, agent_name: str) -> AgentTaskRecord:
         if not agent_name.strip():

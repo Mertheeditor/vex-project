@@ -25,7 +25,7 @@ class TaskEngineTestCase(unittest.TestCase):
 
     def create_task(self, task_id: str = "t1", objective: str = "Do work", parent_task_id: str | None = None):
         return self.engine.create_task(
-            AgentTask(task_id=task_id, objective=objective, requested_by="user"),
+            AgentTask(task_id=task_id, objective=objective, context={"risk_level": "green"}, requested_by="user"),
             parent_task_id=parent_task_id,
         )
 

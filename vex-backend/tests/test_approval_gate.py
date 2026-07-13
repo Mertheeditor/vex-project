@@ -6,15 +6,31 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from app.core.paths import APPROVALS_PATH
-from app.schemas.agent_kernel import AgentTask
+from app.schemas.agent_kernel import AgentContext, AgentResult, AgentTask
 from app.schemas.task_engine import AgentTaskStatus
+from app.services.agent_kernel import BaseAgent
 from app.services.task_engine import TaskEngine
 from app.storage.entity_store import save_items, upsert_item
 from app.routes import approvals
 
 
-class ApprovalGateTests(unittest.TestCase):
+class CountingAgent(BaseAgent):
+    name = "counting-agent"
+
+    def __init__(self) -> None:
+        self.execution_count = 0
+
+    async def execute(self, task: AgentTask, context: AgentContext) -> AgentResult:
+        self.execution_count += 1
+        return AgentResult(
+            task_id=task.task_id,
+            agent=self.name,
+            status="success",
+            summary=task.objective,
+        )
+
+
+class ApprovalGateTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
@@ -35,6 +51,25 @@ class ApprovalGateTests(unittest.TestCase):
         for p in self._patch_approvals_path():
             stack.enter_context(p)
         return stack
+
+    def _prepare_waiting_task(self, task_id: str, risk_level: str | None) -> TaskEngine:
+        engine = TaskEngine()
+        context = {} if risk_level is None else {"risk_level": risk_level}
+        task = AgentTask(
+            task_id=task_id,
+            objective=f"{task_id} objective",
+            context=context,
+            requested_by="test",
+        )
+        engine.create_task(task)
+        engine.transition(task_id, AgentTaskStatus.PLANNING)
+        engine.transition(task_id, AgentTaskStatus.WAITING_APPROVAL)
+        return engine
+
+    async def _execute_with_agent(self, engine: TaskEngine, task_id: str) -> tuple[AgentResult, CountingAgent]:
+        agent = CountingAgent()
+        result = await engine.execute_task(task_id, agent, AgentContext())
+        return result, agent
 
     # ---- Approval Endpoint Tests ----
 
@@ -257,6 +292,71 @@ class ApprovalGateTests(unittest.TestCase):
             with self.assertRaises(Exception) as cm2:
                 approvals.reject_approval("a15")
             self.assertEqual(cm2.exception.status_code, 409)
+
+    async def test_21_green_execute_reaches_agent_without_approval(self):
+        with self._run_with_patches():
+            engine = self._prepare_waiting_task("t21", "green")
+            result, agent = await self._execute_with_agent(engine, "t21")
+            self.assertEqual(result.task_id, "t21")
+            self.assertEqual(agent.execution_count, 1)
+
+    async def test_22_yellow_execute_requires_exact_approved_status_and_risk(self):
+        with self._run_with_patches():
+            upsert_item(self.approvals_path, {"id": "a16", "status": "onaylandı", "risk_level": "YELLOW", "payload": {"task_id": "t22"}})
+            engine = self._prepare_waiting_task("t22", "yellow")
+            result, agent = await self._execute_with_agent(engine, "t22")
+            self.assertEqual(result.task_id, "t22")
+            self.assertEqual(agent.execution_count, 1)
+
+    async def test_23_black_execute_never_reaches_agent(self):
+        with self._run_with_patches():
+            upsert_item(self.approvals_path, {"id": "a17", "status": "onaylandı", "payload": {"task_id": "t23"}})
+            engine = self._prepare_waiting_task("t23", "black")
+            agent = CountingAgent()
+            with self.assertRaises(ValueError) as cm:
+                await engine.execute_task("t23", agent, AgentContext())
+            self.assertIn("black risk level", str(cm.exception))
+            self.assertEqual(agent.execution_count, 0)
+
+    async def test_24_duplicate_resume_does_not_start_second_execution(self):
+        with self._run_with_patches():
+            upsert_item(self.approvals_path, {"id": "a18", "status": "onaylandı", "risk_level": "red", "payload": {"task_id": "t24"}})
+            engine = self._prepare_waiting_task("t24", "red")
+            result, agent = await self._execute_with_agent(engine, "t24")
+            self.assertEqual(result.task_id, "t24")
+            with self.assertRaises(ValueError) as cm:
+                await engine.execute_task("t24", agent, AgentContext())
+            self.assertIn("already running", str(cm.exception))
+            self.assertEqual(agent.execution_count, 1)
+
+    async def test_25_rejected_approval_blocks_execution_even_with_approved_one(self):
+        with self._run_with_patches():
+            upsert_item(self.approvals_path, {"id": "a19", "status": "onaylandı", "risk_level": "yellow", "payload": {"task_id": "t25"}})
+            upsert_item(self.approvals_path, {"id": "a20", "status": "reddedildi", "risk_level": "red", "payload": {"task_id": "t25"}})
+            engine = self._prepare_waiting_task("t25", "yellow")
+            agent = CountingAgent()
+            with self.assertRaises(ValueError) as cm:
+                await engine.execute_task("t25", agent, AgentContext())
+            self.assertIn("rejected approval", str(cm.exception))
+            self.assertEqual(agent.execution_count, 0)
+
+    def test_26_planning_to_running_direct_transition_is_gated(self):
+        with self._run_with_patches():
+            engine = TaskEngine()
+            task = AgentTask(task_id="t26", objective="direct", context={"risk_level": "yellow"}, requested_by="test")
+            engine.create_task(task)
+            engine.transition("t26", AgentTaskStatus.PLANNING)
+            with self.assertRaises(ValueError) as cm:
+                engine.transition("t26", AgentTaskStatus.RUNNING)
+            self.assertIn("No approval found", str(cm.exception))
+
+    def test_27_approved_risk_mismatch_is_not_accepted(self):
+        with self._run_with_patches():
+            upsert_item(self.approvals_path, {"id": "a21", "status": "onaylandı", "risk_level": "red", "payload": {"task_id": "t27"}})
+            engine = self._prepare_waiting_task("t27", "yellow")
+            with self.assertRaises(ValueError) as cm:
+                engine.transition("t27", AgentTaskStatus.RUNNING)
+            self.assertIn("approved approval for risk level 'yellow'", str(cm.exception))
 
 
 if __name__ == "__main__":
