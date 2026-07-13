@@ -129,7 +129,7 @@ export function SeoExpertPage() {
           <div>
             <p className="eyebrow">Yeni audit</p>
             <h3>Siteyi gerçek backend analiziyle tara</h3>
-            <p className="seo-muted">Demo veri yok; sonuçlar yalnızca `/seo/audits` API yanıtından gösterilir.</p>
+            <p className="seo-muted">Demo veri yok; sonuçlar `/seo/audits` API yanıtından ve frontend’de etiketli heuristic türetimlerden gösterilir.</p>
           </div>
 
           <div className="form-grid">
@@ -162,7 +162,7 @@ export function SeoExpertPage() {
               <input
                 type="number"
                 min="1"
-                max="250"
+                max="50"
                 value={form.max_pages}
                 onChange={(event) => setForm((current) => ({ ...current, max_pages: Number(event.target.value) }))}
               />
@@ -504,7 +504,7 @@ function isValidHttpUrl(value: string) {
 
 function clampMaxPages(value: number) {
   if (!Number.isFinite(value)) return 25;
-  return Math.max(1, Math.min(250, Math.round(value)));
+  return Math.max(1, Math.min(50, Math.round(value)));
 }
 
 function formatValue(value: unknown) {

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import ipaddress
 import re
 import socket
+import ssl
 import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
-from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
 
 from app.schemas.seo import (
     IssueSeverity,
@@ -38,6 +38,36 @@ class SeoAuditError(ValueError):
     """Raised for invalid or unsafe SEO audit requests."""
 
 
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that dials a vetted IP while preserving SNI."""
+
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        timeout: int,
+        context: ssl.SSLContext,
+    ) -> None:
+        super().__init__(host, port=port, timeout=timeout, context=context)
+        self.pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((self.pinned_ip, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+
+
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection that dials a vetted IP while preserving Host."""
+
+    def __init__(self, host: str, pinned_ip: str, port: int, timeout: int) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self.pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self.pinned_ip, self.port), self.timeout)
+
+
 @dataclass(frozen=True)
 class FetchResult:
     """Safe HTTP fetch result."""
@@ -47,20 +77,6 @@ class FetchResult:
     content_type: str
     body: bytes
     final_url: str
-
-
-class NoRedirectHandler(HTTPRedirectHandler):
-    """Disable urllib automatic redirects so every Location is validated first."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
-
-
-class NoRedirectHandler(HTTPRedirectHandler):
-    """Disable urllib automatic redirects so every Location is validated first."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
 
 
 class SeoHtmlParser(HTMLParser):
@@ -128,11 +144,9 @@ class SeoCrawler:
         self,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         max_response_bytes: int = MAX_RESPONSE_BYTES,
-        opener: OpenerDirector | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
-        self.opener = opener or build_opener(NoRedirectHandler)
 
     async def crawl(self, start_url: str, max_pages: int = DEFAULT_MAX_PAGES) -> tuple[list[FetchResult], list[str], SeoSiteSignals]:
         capped_max_pages = min(max_pages, HARD_MAX_PAGES)
@@ -196,48 +210,78 @@ class SeoCrawler:
         current = url
         root_host = urlparse(url).hostname or ""
         for _ in range(6):
-            self.validate_public_url(current)
-            request = Request(current, headers={"User-Agent": USER_AGENT})
-            try:
-                response = self.opener.open(request, timeout=self.timeout_seconds)
-                status = getattr(response, "status", 200)
-                final_url = normalize_url(getattr(response, "url", current))
-                self.validate_public_url(final_url)
-                if not same_registered_host(root_host, urlparse(final_url).hostname or ""):
-                    raise SeoAuditError(f"Redirect left domain: {current} -> {final_url}")
-                content_type = response.headers.get("Content-Type", "")
-                body = response.read(self.max_response_bytes + 1)
-                if len(body) > self.max_response_bytes:
-                    raise SeoAuditError(f"Response too large: {current}")
-                return FetchResult(
-                    url=current,
-                    status_code=int(status),
-                    content_type=content_type,
-                    body=body,
-                    final_url=final_url,
-                )
-            except HTTPError as exc:
-                if exc.code in {301, 302, 303, 307, 308}:
-                    location = exc.headers.get("Location")
-                    if not location:
-                        raise SeoAuditError(f"Redirect missing location: {current}") from exc
-                    next_url = normalize_url(urljoin(current, location))
-                    self.validate_public_url(next_url)
-                    if not same_registered_host(root_host, urlparse(next_url).hostname or ""):
-                        raise SeoAuditError(f"Redirect left domain: {current} -> {next_url}") from exc
-                    current = next_url
-                    continue
-                body = exc.read(min(self.max_response_bytes, 8192))
-                return FetchResult(
-                    url=current,
-                    status_code=int(exc.code),
-                    content_type=exc.headers.get("Content-Type", ""),
-                    body=body,
-                    final_url=current,
-                )
-            except URLError as exc:
-                raise SeoAuditError(f"Network error for {current}: {exc.reason}") from exc
+            result = self._fetch_once(current)
+            final_url = normalize_url(result.final_url)
+            self.validate_public_url(final_url)
+            if not same_registered_host(root_host, urlparse(final_url).hostname or ""):
+                raise SeoAuditError(f"Redirect left domain: {current} -> {final_url}")
+            if result.status_code in {301, 302, 303, 307, 308}:
+                location = result.content_type
+                if not location:
+                    raise SeoAuditError(f"Redirect missing location: {current}")
+                next_url = normalize_url(urljoin(current, location))
+                self.validate_public_url(next_url)
+                if not same_registered_host(root_host, urlparse(next_url).hostname or ""):
+                    raise SeoAuditError(f"Redirect left domain: {current} -> {next_url}")
+                current = next_url
+                continue
+            return result
         raise SeoAuditError(f"Too many redirects: {url}")
+
+    def _fetch_once(self, url: str) -> FetchResult:
+        self.validate_public_url(url)
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        address = choose_public_address(host)
+        pinned_ip = str(address)
+        path = urlunparse(("", "", parsed.path or "/", "", parsed.query, ""))
+        connection: http.client.HTTPConnection
+        if parsed.scheme == "https":
+            connection = PinnedHTTPSConnection(
+                host=host,
+                pinned_ip=pinned_ip,
+                port=port,
+                timeout=self.timeout_seconds,
+                context=ssl.create_default_context(),
+            )
+        else:
+            connection = PinnedHTTPConnection(
+                host=host,
+                pinned_ip=pinned_ip,
+                port=port,
+                timeout=self.timeout_seconds,
+            )
+        try:
+            connection.request("GET", path, headers={"Host": host, "User-Agent": USER_AGENT})
+            response = connection.getresponse()
+            peer = connection.sock.getpeername()[0] if connection.sock else str(address)
+            peer_address = ipaddress.ip_address(peer)
+            if peer_address != address or is_blocked_ip(peer_address):
+                raise SeoAuditError(f"Unsafe peer IP blocked for host {host}")
+            location = response.getheader("Location") or ""
+            if response.status in {301, 302, 303, 307, 308}:
+                return FetchResult(
+                    url=url,
+                    status_code=int(response.status),
+                    content_type=location,
+                    body=b"",
+                    final_url=normalize_url(urljoin(url, location)) if location else url,
+                )
+            body = response.read(self.max_response_bytes + 1)
+            if len(body) > self.max_response_bytes:
+                raise SeoAuditError(f"Response too large: {url}")
+            return FetchResult(
+                url=url,
+                status_code=int(response.status),
+                content_type=response.getheader("Content-Type") or "",
+                body=body,
+                final_url=url,
+            )
+        except OSError as exc:
+            raise SeoAuditError(f"Network error for {url}: {exc}") from exc
+        finally:
+            connection.close()
 
     async def discover_sitemaps(self, start_url: str, root_host: str, errors: list[str]) -> list[str]:
         robots_url = urljoin(start_url, "/robots.txt")
@@ -375,6 +419,14 @@ def resolve_host(host: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address
         return {ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)}
     except socket.gaierror as exc:
         raise SeoAuditError(f"DNS resolution failed for {host}") from exc
+
+
+def choose_public_address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    addresses = sorted(resolve_host(host), key=lambda address: (address.version, str(address)))
+    for address in addresses:
+        if not is_blocked_ip(address):
+            return address
+    raise SeoAuditError(f"Unsafe IP address blocked for host {host}")
 
 
 def is_blocked_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

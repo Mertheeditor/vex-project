@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import http.client
+import http.client
 import ipaddress
 import tempfile
 import unittest
@@ -93,6 +95,40 @@ class SeoSecurityTests(unittest.TestCase):
         )
         with self.assertRaises(SeoAuditError):
             self.run_async(crawler.fetch("https://example.com/"))
+
+    def test_fetch_pins_connection_to_validated_ip(self) -> None:
+        crawler = SeoCrawler()
+        used_ips: list[str] = []
+
+        class FakeConnection:
+            def __init__(self, host: str, pinned_ip: str, port: int, timeout: int) -> None:
+                used_ips.append(pinned_ip)
+                self.sock = None
+
+            def request(self, method: str, path: str, headers: dict[str, str]) -> None:
+                return None
+
+            def getresponse(self):
+                class FakeResponse:
+                    status = 200
+
+                    def getheader(self, name: str) -> str:
+                        return "text/html" if name == "Content-Type" else ""
+
+                    def read(self, size: int) -> bytes:
+                        return b"<html></html>"
+
+                return FakeResponse()
+
+            def close(self) -> None:
+                return None
+
+        with patch("app.services.seo_service.resolve_host") as resolver:
+            resolver.return_value = {ipaddress.ip_address("93.184.216.34")}
+            with patch("app.services.seo_service.PinnedHTTPConnection", FakeConnection):
+                result = crawler._fetch_once("http://example.com/")
+        self.assertEqual(result.status_code, http.client.OK)
+        self.assertEqual(used_ips, ["93.184.216.34"])
 
     def run_async(self, coro):
         import asyncio
