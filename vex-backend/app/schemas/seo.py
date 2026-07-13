@@ -5,13 +5,28 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 IssueSeverity = Literal["P0", "P1", "P2", "P3"]
+PageType = Literal[
+    "homepage",
+    "collection",
+    "product",
+    "blog/article",
+    "content page",
+    "cart",
+    "account",
+    "policy",
+    "search",
+    "unknown",
+]
 
 
 class SeoAuditRequest(BaseModel):
     """Request body for starting an SEO audit."""
 
     url: HttpUrl
-    max_pages: int = Field(default=25, ge=1, le=50)
+    country: str = ""
+    language: str = ""
+    business_description: str = ""
+    max_pages: int = Field(default=100, ge=1, le=500)
     include_ai_recommendations: bool = False
 
     @field_validator("url")
@@ -31,6 +46,9 @@ class SeoIssue(BaseModel):
     url: str = ""
     recommendation: str
     platform_hint: str = "generic"
+    current_value: str = ""
+    page_type: PageType | str = "unknown"
+    scope: Literal["page", "site", "crawl"] = "page"
 
 
 class SeoRecommendation(BaseModel):
@@ -49,6 +67,10 @@ class SeoPageAnalysis(BaseModel):
     source_url: str = ""
     status_code: int
     depth: int
+    page_type: PageType | str = "unknown"
+    page_score: int | None = None
+    platform: str = "unknown"
+    score_reasons: list[str] = Field(default_factory=list)
     title: str = ""
     meta_description: str = ""
     h1: list[str] = Field(default_factory=list)
@@ -81,6 +103,15 @@ class SeoSiteSignals(BaseModel):
     broken_links: list[str] = Field(default_factory=list)
     robots_url: str = ""
     sitemap_urls: list[str] = Field(default_factory=list)
+    discovered_urls: int = 0
+    crawled_urls: int = 0
+    skipped_urls: int = 0
+    blocked_urls: int = 0
+    errored_urls: int = 0
+    platform: str = "unknown"
+    platform_confidence: str = "unknown"
+    page_type_counts: dict[str, int] = Field(default_factory=dict)
+    score_reasons: list[str] = Field(default_factory=list)
 
 
 class SeoAudit(BaseModel):

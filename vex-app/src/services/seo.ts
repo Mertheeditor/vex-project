@@ -93,6 +93,7 @@ function normalizeBackendAudit(audit: Record<string, unknown>): SeoAuditResult {
   const pages = arrayOfRecords(audit.pages).map(normalizePage);
   const issues = arrayOfRecords(audit.issues).map(normalizeIssue);
   const priorityCounts = countPriorities(issues);
+  const siteSignals = isRecord(audit.site_signals) ? audit.site_signals : {};
 
   return {
     audit_id: stringValue(audit.id),
@@ -102,11 +103,24 @@ function normalizeBackendAudit(audit: Record<string, unknown>): SeoAuditResult {
       pages: numberValue(audit.crawled_pages),
       pages_crawled: numberValue(audit.crawled_pages),
       total_pages: numberValue(audit.max_pages),
+      discovered_urls: numberValue(siteSignals.discovered_urls),
+      skipped_urls: numberValue(siteSignals.skipped_urls),
+      blocked_urls: numberValue(siteSignals.blocked_urls),
+      errored_urls: numberValue(siteSignals.errored_urls),
+      platform: stringValue(siteSignals.platform),
+      platform_confidence: stringValue(siteSignals.platform_confidence),
       p0: priorityCounts.P0,
       p1: priorityCounts.P1,
       p2: priorityCounts.P2,
       p3: priorityCounts.P3,
       issues: issues.length,
+    },
+    crawl_stats: {
+      discovered_urls: numberValue(siteSignals.discovered_urls),
+      crawled_urls: numberValue(siteSignals.crawled_urls),
+      skipped_urls: numberValue(siteSignals.skipped_urls),
+      blocked_urls: numberValue(siteSignals.blocked_urls),
+      errored_urls: numberValue(siteSignals.errored_urls),
     },
     pages,
     issues,
@@ -138,10 +152,15 @@ function normalizeBackendAudit(audit: Record<string, unknown>): SeoAuditResult {
 
 function normalizePage(page: Record<string, unknown>): SeoAuditPage {
   const issues = arrayOfRecords(page.issues).map(normalizeIssue);
+  const pageScore = nullableNumberValue(page.page_score);
   return {
     url: stringValue(page.url),
     status: numberValue(page.status_code),
-    score: Math.max(0, 100 - issues.length * 8),
+    score: pageScore ?? undefined,
+    page_score: pageScore,
+    page_type: stringValue(page.page_type),
+    platform: stringValue(page.platform),
+    score_reasons: stringArray(page.score_reasons),
     title: stringValue(page.title),
     h1: stringArray(page.h1),
     index: booleanValue(page.indexable),
@@ -163,14 +182,17 @@ function normalizeIssue(issue: Record<string, unknown>): SeoAuditIssue {
     title: stringValue(issue.message),
     url: stringValue(issue.url),
     page_url: stringValue(issue.url),
-    current: "Mevcut sayfa sinyali önerilen SEO standardını karşılamıyor.",
+    current: stringValue(issue.current_value) || "Bulunamadı",
+    current_value: stringValue(issue.current_value) || "Bulunamadı",
     recommended: stringValue(issue.recommendation),
     recommendation: stringValue(issue.recommendation),
     explanation: "Bu bulgu teknik ve on-page SEO skorunu düşüren deterministik bir kontrolden geldi.",
     how: stringValue(issue.recommendation),
     how_to_fix: stringValue(issue.recommendation),
     platform: stringValue(issue.platform_hint) || "Bilinmeyen platform",
-    category: stringValue(issue.code).includes("title") || stringValue(issue.code).includes("h1") ? "on_page" : "technical",
+    category: stringValue(issue.scope) || (stringValue(issue.code).includes("title") || stringValue(issue.code).includes("h1") ? "on_page" : "technical"),
+    page_type: stringValue(issue.page_type),
+    scope: stringValue(issue.scope),
     expected_impact: priority === "P0" || priority === "P1" ? "Yüksek" : "Orta",
   };
 }
@@ -208,6 +230,10 @@ function stringArray(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function nullableNumberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function booleanValue(value: unknown) {

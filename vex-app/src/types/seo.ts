@@ -28,6 +28,14 @@ export interface SeoAuditRequest {
   max_pages: number;
 }
 
+export interface SeoCrawlStats {
+  discovered_urls?: number;
+  crawled_urls?: number;
+  skipped_urls?: number;
+  blocked_urls?: number;
+  errored_urls?: number;
+}
+
 export interface SeoAuditStage {
   key?: SeoAuditStageKey | string;
   name?: string;
@@ -52,6 +60,10 @@ export interface SeoAuditPage {
   url?: string;
   status?: number | string;
   score?: number;
+  page_score?: number | null;
+  page_type?: string;
+  platform?: string;
+  score_reasons?: string[];
   title?: string;
   h1?: string | string[];
   index?: boolean | string;
@@ -77,6 +89,9 @@ export interface SeoAuditIssue {
   platform?: string;
   category?: string;
   page_url?: string;
+  current_value?: string;
+  page_type?: string;
+  scope?: string;
   [key: string]: unknown;
 }
 
@@ -114,6 +129,7 @@ export interface SeoAuditResult {
   status: SeoAuditStatus | string;
   stages?: SeoAuditStage[] | Record<string, SeoAuditStage | string>;
   summary?: SeoAuditSummary;
+  crawl_stats?: SeoCrawlStats;
   pages?: SeoAuditPage[];
   issues?: SeoAuditIssue[];
   keyword_recommendations?: SeoKeywordRecommendation[];

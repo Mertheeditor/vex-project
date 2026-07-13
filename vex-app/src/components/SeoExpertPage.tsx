@@ -44,7 +44,7 @@ const initialForm: SeoAuditRequest = {
   country: "Türkiye",
   language: "Türkçe",
   business_description: "",
-  max_pages: 25,
+  max_pages: 100,
 };
 
 export function SeoExpertPage() {
@@ -162,7 +162,7 @@ export function SeoExpertPage() {
               <input
                 type="number"
                 min="1"
-                max="50"
+                max="500"
                 value={form.max_pages}
                 onChange={(event) => setForm((current) => ({ ...current, max_pages: Number(event.target.value) }))}
               />
@@ -233,7 +233,11 @@ export function SeoExpertPage() {
           <>
             <section className="seo-summary-grid">
               <SummaryCard label="Skor" value={formatValue(audit.summary?.score)} />
-              <SummaryCard label="Sayfa" value={formatValue(audit.summary?.pages ?? audit.summary?.pages_crawled ?? audit.summary?.total_pages ?? audit.pages?.length)} />
+              <SummaryCard label="Taranan" value={formatValue(audit.crawl_stats?.crawled_urls ?? audit.summary?.pages_crawled ?? audit.pages?.length)} />
+              <SummaryCard label="Keşfedilen" value={formatValue(audit.crawl_stats?.discovered_urls ?? audit.summary?.discovered_urls)} />
+              <SummaryCard label="Atlanan" value={formatValue(audit.crawl_stats?.skipped_urls ?? audit.summary?.skipped_urls)} />
+              <SummaryCard label="Engel/Hata" value={`${formatValue(audit.crawl_stats?.blocked_urls ?? audit.summary?.blocked_urls)} / ${formatValue(audit.crawl_stats?.errored_urls ?? audit.summary?.errored_urls)}`} />
+              <SummaryCard label="Platform" value={formatValue(audit.summary?.platform)} />
               <SummaryCard label="P0" value={priorityCounts.P0.toString()} tone="critical" />
               <SummaryCard label="P1" value={priorityCounts.P1.toString()} tone="warning" />
               <SummaryCard label="P2" value={priorityCounts.P2.toString()} />
@@ -313,6 +317,7 @@ function PagesTab({ pages, selectedPage, onSelectPage }: { pages: SeoAuditPage[]
               <th>URL</th>
               <th>Status</th>
               <th>Score</th>
+              <th>Tür</th>
               <th>Title</th>
               <th>H1</th>
               <th>Index</th>
@@ -325,7 +330,8 @@ function PagesTab({ pages, selectedPage, onSelectPage }: { pages: SeoAuditPage[]
               <tr key={page.url ?? JSON.stringify(page)} onClick={() => onSelectPage(page)} className={selectedPage?.url === page.url ? "selected" : ""}>
                 <td>{page.url ?? "-"}</td>
                 <td>{formatValue(page.status)}</td>
-                <td>{formatValue(page.score)}</td>
+                <td>{formatPageScore(page)}</td>
+                <td>{formatValue(page.page_type)}</td>
                 <td>{page.title ?? "-"}</td>
                 <td>{formatH1(page.h1)}</td>
                 <td>{formatValue(page.index ?? page.indexable)}</td>
@@ -503,8 +509,8 @@ function isValidHttpUrl(value: string) {
 }
 
 function clampMaxPages(value: number) {
-  if (!Number.isFinite(value)) return 25;
-  return Math.max(1, Math.min(50, Math.round(value)));
+  if (!Number.isFinite(value)) return 100;
+  return Math.max(1, Math.min(500, Math.round(value)));
 }
 
 function formatValue(value: unknown) {
@@ -521,6 +527,10 @@ function formatH1(value: SeoAuditPage["h1"]) {
 function formatPageIssueCount(value: SeoAuditPage["issues"]) {
   if (Array.isArray(value)) return value.length.toString();
   return formatValue(value);
+}
+
+function formatPageScore(page: SeoAuditPage) {
+  return typeof page.page_score === "number" ? page.page_score.toString() : "Hesaplanmadı";
 }
 
 function formatSource(source: unknown) {

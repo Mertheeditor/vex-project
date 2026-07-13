@@ -10,6 +10,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -21,12 +22,13 @@ from app.schemas.seo import (
     SeoPageAnalysis,
     SeoRecommendation,
     SeoSiteSignals,
+    PageType,
 )
 from app.storage.seo_store import SeoAuditStore
 
 USER_AGENT = "VexSeoBot/1.0"
-DEFAULT_MAX_PAGES = 25
-HARD_MAX_PAGES = 50
+DEFAULT_MAX_PAGES = 100
+HARD_MAX_PAGES = 500
 DEFAULT_TIMEOUT_SECONDS = 8
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_FACET_PARAMS = 6
@@ -82,6 +84,9 @@ class FetchResult:
 class SeoHtmlParser(HTMLParser):
     """Small HTML extractor for deterministic SEO analysis."""
 
+    EXCLUDED_TEXT_TAGS = {"script", "style", "noscript", "template", "svg", "head"}
+    LOW_VALUE_TEXT_TAGS = {"nav", "footer", "header", "aside"}
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.title = ""
@@ -91,13 +96,16 @@ class SeoHtmlParser(HTMLParser):
         self.scripts: list[dict[str, str]] = []
         self.html_attrs: dict[str, str] = {}
         self.headings: dict[str, list[str]] = {"h1": [], "h2": [], "h3": []}
+        self._tag_stack: list[str] = []
         self._capture_tag = ""
         self._capture_parts: list[str] = []
-        self._text_parts: list[str] = []
+        self._main_text_parts: list[str] = []
+        self._fallback_text_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): value or "" for key, value in attrs}
         tag = tag.lower()
+        self._tag_stack.append(tag)
         if tag == "html":
             self.html_attrs = values
         elif tag == "title":
@@ -127,14 +135,34 @@ class SeoHtmlParser(HTMLParser):
                 self.headings[tag].append(text)
             self._capture_tag = ""
             self._capture_parts = []
+        if tag in self._tag_stack:
+            while self._tag_stack:
+                popped = self._tag_stack.pop()
+                if popped == tag:
+                    break
 
     def handle_data(self, data: str) -> None:
         if self._capture_tag:
             self._capture_parts.append(data)
-        self._text_parts.append(data)
+        if self._is_text_excluded():
+            return
+        cleaned = _clean_text(data)
+        if not cleaned:
+            return
+        if self._is_low_value_text():
+            self._fallback_text_parts.append(cleaned)
+        else:
+            self._main_text_parts.append(cleaned)
 
     def visible_text(self) -> str:
-        return _clean_text(" ".join(self._text_parts))
+        parts = self._main_text_parts or self._fallback_text_parts
+        return _clean_text(" ".join(parts))
+
+    def _is_text_excluded(self) -> bool:
+        return any(tag in self.EXCLUDED_TEXT_TAGS for tag in self._tag_stack)
+
+    def _is_low_value_text(self) -> bool:
+        return any(tag in self.LOW_VALUE_TEXT_TAGS for tag in self._tag_stack)
 
 
 class SeoCrawler:
@@ -153,40 +181,52 @@ class SeoCrawler:
         normalized_start = normalize_url(start_url)
         self.validate_public_url(normalized_start)
         root_host = urlparse(normalized_start).hostname or ""
-        queue: deque[tuple[str, int, str]] = deque([(normalized_start, 0, "")])
+        queue: deque[tuple[str, int, str]] = deque()
         seen: set[str] = set()
+        queued: set[str] = set()
         results: list[FetchResult] = []
         errors: list[str] = []
+        skipped_urls = 0
+        blocked_urls = 0
         signals = SeoSiteSignals(
             robots_url=urljoin(normalized_start, "/robots.txt"),
             sitemap_urls=[],
         )
 
         sitemap_urls = await self.discover_sitemaps(normalized_start, root_host, errors)
-        signals.sitemap_urls = sitemap_urls[:20]
-        for sitemap_url in sitemap_urls[:10]:
-            if len(queue) >= capped_max_pages:
+        signals.sitemap_urls = sitemap_urls[:100]
+        for sitemap_url in sitemap_urls:
+            if len(queued) >= capped_max_pages * 3:
                 break
-            queue.append((sitemap_url, 1, normalized_start))
+            if sitemap_url not in queued:
+                queue.append((sitemap_url, 1, normalized_start))
+                queued.add(sitemap_url)
+        if normalized_start not in queued:
+            queue.appendleft((normalized_start, 0, ""))
+            queued.add(normalized_start)
 
         while queue and len(results) < capped_max_pages:
             current_url, depth, source_url = queue.popleft()
             normalized_current = normalize_url(current_url)
             if normalized_current in seen:
+                skipped_urls += 1
                 continue
             seen.add(normalized_current)
             try:
                 self.validate_public_url(normalized_current)
                 if not same_registered_host(root_host, urlparse(normalized_current).hostname or ""):
+                    skipped_urls += 1
                     continue
                 fetched = await self.fetch(normalized_current)
                 final_normalized = normalize_url(fetched.final_url)
                 self.validate_public_url(final_normalized)
                 if not same_registered_host(root_host, urlparse(final_normalized).hostname or ""):
+                    blocked_urls += 1
                     errors.append(f"Redirect left domain: {normalized_current} -> {final_normalized}")
                     continue
                 content_type = fetched.content_type.lower()
                 if "text/html" not in content_type:
+                    skipped_urls += 1
                     continue
                 results.append(fetched)
                 if len(results) >= capped_max_pages:
@@ -195,12 +235,23 @@ class SeoCrawler:
                 parser.feed(_decode_body(fetched.body))
                 for link in extract_anchor_links(parser, final_normalized, root_host):
                     normalized_link = normalize_url(link)
-                    if normalized_link not in seen and len(seen) + len(queue) < capped_max_pages * 3:
+                    if normalized_link not in seen and normalized_link not in queued and len(queued) < capped_max_pages * 3:
                         queue.append((normalized_link, depth + 1, final_normalized))
+                        queued.add(normalized_link)
+                    elif normalized_link in seen or normalized_link in queued:
+                        skipped_urls += 1
             except SeoAuditError as exc:
-                errors.append(str(exc))
+                if "Unsafe IP" in str(exc) or "Localhost" in str(exc) or "Redirect left domain" in str(exc):
+                    blocked_urls += 1
+                else:
+                    errors.append(str(exc))
             except Exception as exc:
                 errors.append(f"Fetch failed for {normalized_current}: {exc}")
+        signals.discovered_urls = len(queued)
+        signals.crawled_urls = len(results)
+        signals.skipped_urls = skipped_urls
+        signals.blocked_urls = blocked_urls
+        signals.errored_urls = len(errors)
         return results, errors, signals
 
     async def fetch(self, url: str) -> FetchResult:
@@ -304,7 +355,7 @@ class SeoCrawler:
             try:
                 fetched = await self.fetch(sitemap_url)
                 text = _decode_body(fetched.body)
-                sitemap_pages.extend(parse_sitemap_urls(text, root_host)[:20])
+                sitemap_pages.extend(parse_sitemap_urls(text, root_host)[:HARD_MAX_PAGES])
             except Exception as exc:
                 errors.append(f"sitemap discovery failed for {sitemap_url}: {exc}")
         return list(dict.fromkeys(sitemap_pages or found))
@@ -337,6 +388,9 @@ class SeoAuditService:
         self,
         url: str,
         max_pages: int = DEFAULT_MAX_PAGES,
+        country: str = "",
+        language: str = "",
+        business_description: str = "",
         include_ai_recommendations: bool = False,
     ) -> SeoAudit:
         capped_max_pages = min(max_pages, HARD_MAX_PAGES)
@@ -346,7 +400,8 @@ class SeoAuditService:
         site_signals = build_site_signals(pages, signals)
         issues = collect_issues(pages, site_signals, crawl_errors)
         score = score_audit(issues, pages)
-        recommendations = build_recommendations(issues)
+        site_signals.score_reasons = score_reasons(issues, pages)
+        recommendations = build_recommendations(issues, language, business_description)
         ai_recommendations = await self._optional_ai_recommendations(include_ai_recommendations)
         audit = SeoAudit(
             id=f"seo-{uuid.uuid4().hex[:12]}",
@@ -363,7 +418,20 @@ class SeoAuditService:
             site_signals=site_signals,
             crawl_errors=crawl_errors,
             ai_recommendations=ai_recommendations,
-            metadata={"traffic_note": "No traffic or volume estimates are generated."},
+            metadata={
+                "traffic_note": "No traffic or volume estimates are generated.",
+                "targeting": {
+                    "country": country,
+                    "language": language,
+                    "business_description": business_description,
+                },
+                "mspovleceni_reference": {
+                    "previous_title": "missing_title/boş veya hatalı",
+                    "new_title_expected": "mSpovleceni | Nakupujte kvalitní povlečení a bytový textil online",
+                    "page_limit_previous": 50,
+                    "page_limit_new": HARD_MAX_PAGES,
+                },
+            },
         )
         self.store.save_audit(audit.model_dump())
         return audit
@@ -485,12 +553,15 @@ def analyze_fetches(fetches: list[FetchResult]) -> list[SeoPageAnalysis]:
 def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
     base_url = normalize_url(fetch.final_url)
     root_host = urlparse(base_url).hostname or ""
+    html_text = _decode_body(fetch.body)
     meta_description = first_meta(parser, "description")
     robots = first_meta(parser, "robots")
     canonical = first_link(parser, "canonical", base_url)
     viewport = first_meta(parser, "viewport")
     open_graph = prefixed_meta(parser, "property", "og:")
     twitter = prefixed_meta(parser, "name", "twitter:")
+    page_type = classify_page_type(base_url, parser)
+    platform, _confidence = detect_platform(html_text, parser)
     internal_links: list[str] = []
     external_links: list[str] = []
     for link in parser.links:
@@ -510,8 +581,10 @@ def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
     missing_alt = sum(1 for image in parser.images if not image.get("alt", "").strip())
     json_ld_count = sum(1 for script in parser.scripts if script.get("type", "").lower() == "application/ld+json")
     noindex = "noindex" in robots.lower()
+    visible_words = visible_word_count(parser.visible_text())
     issues = analyze_page_issues(
         base_url,
+        page_type,
         parser.title,
         meta_description,
         parser.headings["h1"],
@@ -520,12 +593,19 @@ def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
         missing_alt,
         len(parser.images),
         noindex,
+        visible_words,
+        platform,
     )
+    page_score, score_reasons = score_page(issues, page_type)
     return SeoPageAnalysis(
         url=base_url,
         source_url=fetch.url,
         status_code=fetch.status_code,
         depth=0,
+        page_type=page_type,
+        page_score=page_score,
+        platform=platform,
+        score_reasons=score_reasons,
         title=parser.title,
         meta_description=meta_description,
         h1=parser.headings["h1"][:10],
@@ -534,7 +614,7 @@ def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
         canonical=canonical,
         robots=robots,
         lang=parser.html_attrs.get("lang", ""),
-        word_count=len(re.findall(r"\w+", parser.visible_text())),
+        word_count=visible_words,
         internal_links=list(dict.fromkeys(internal_links))[:100],
         external_links=list(dict.fromkeys(external_links))[:100],
         images_total=len(parser.images),
@@ -550,6 +630,7 @@ def analyze_page(fetch: FetchResult, parser: SeoHtmlParser) -> SeoPageAnalysis:
 
 def analyze_page_issues(
     url: str,
+    page_type: str,
     title: str,
     description: str,
     h1: list[str],
@@ -558,28 +639,34 @@ def analyze_page_issues(
     missing_alt: int,
     total_images: int,
     noindex: bool,
+    word_count: int,
+    platform: str,
 ) -> list[SeoIssue]:
     issues: list[SeoIssue] = []
+    utility = is_utility_page(page_type)
+    platform_hint = platform if platform != "unknown" else "generic"
     if not title:
-        issues.append(issue("P1", "missing_title", "Missing title tag", url, "Add a unique title tag."))
-    elif len(title) < 20 or len(title) > 65:
-        issues.append(issue("P3", "title_length", "Title length is outside the recommended range", url, "Use a descriptive 20-65 character title."))
-    if not description:
-        issues.append(issue("P2", "missing_meta_description", "Missing meta description", url, "Add a concise meta description."))
-    elif len(description) > 170:
-        issues.append(issue("P3", "meta_description_length", "Meta description is long", url, "Keep meta descriptions under 170 characters."))
-    if not h1:
-        issues.append(issue("P2", "missing_h1", "Missing H1", url, "Add one clear H1 heading."))
+        issues.append(issue("P1", "missing_title", "Missing title tag", url, "Add a unique title tag.", platform_hint, "Bulunamadı", page_type))
+    elif not utility and (len(title) < 20 or len(title) > 70):
+        issues.append(issue("P3", "title_length", "Title length is outside the recommended range", url, "Use a descriptive 20-70 character title.", platform_hint, title, page_type))
+    if not description and not utility:
+        issues.append(issue("P2", "missing_meta_description", "Missing meta description", url, "Add a concise meta description.", platform_hint, "Bulunamadı", page_type))
+    elif description and len(description) > 170:
+        issues.append(issue("P3", "meta_description_length", "Meta description is long", url, "Keep meta descriptions under 170 characters.", platform_hint, description, page_type))
+    if not h1 and not utility:
+        issues.append(issue("P2", "missing_h1", "Missing H1", url, "Add one clear H1 heading.", platform_hint, "Bulunamadı", page_type))
     elif len(h1) > 1:
-        issues.append(issue("P3", "multiple_h1", "Multiple H1 headings", url, "Use one primary H1 where possible."))
+        issues.append(issue("P3", "multiple_h1", "Multiple H1 headings", url, "Use one primary H1 where possible.", platform_hint, " / ".join(h1[:3]), page_type))
     if not canonical:
-        issues.append(issue("P3", "missing_canonical", "Missing canonical link", url, "Add a self-referencing canonical URL."))
+        issues.append(issue("P3", "missing_canonical", "Missing canonical link", url, "Add a self-referencing canonical URL.", platform_hint, "Bulunamadı", page_type))
     if not viewport:
-        issues.append(issue("P2", "missing_viewport", "Missing viewport meta tag", url, "Add a responsive viewport meta tag."))
+        issues.append(issue("P2", "missing_viewport", "Missing viewport meta tag", url, "Add a responsive viewport meta tag.", platform_hint, "Bulunamadı", page_type))
+    if not utility and page_type in {"homepage", "collection", "product", "blog/article", "content page"} and word_count < 80:
+        issues.append(issue("P3", "thin_visible_content", "Visible content is thin", url, "Add useful visible copy for users and search engines.", platform_hint, str(word_count), page_type))
     if total_images and missing_alt:
-        issues.append(issue("P3", "images_missing_alt", "Some images are missing alt text", url, "Add descriptive alt text to meaningful images."))
-    if noindex:
-        issues.append(issue("P1", "noindex", "Page is marked noindex", url, "Confirm noindex is intentional."))
+        issues.append(issue("P3", "images_missing_alt", "Some images are missing alt text", url, "Add descriptive alt text to meaningful images.", platform_hint, f"{missing_alt}/{total_images} missing", page_type))
+    if noindex and not utility:
+        issues.append(issue("P1", "noindex", "Page is marked noindex", url, "Confirm noindex is intentional.", platform_hint, "noindex", page_type))
     return issues
 
 
@@ -605,6 +692,10 @@ def build_site_signals(pages: list[SeoPageAnalysis], base: SeoSiteSignals) -> Se
         for link in page.internal_links:
             if link not in page_urls and len(page_urls) > 1:
                 broken_links.append(link)
+    platform, confidence = aggregate_platform(pages)
+    page_type_counts: dict[str, int] = {}
+    for page in pages:
+        page_type_counts[page.page_type] = page_type_counts.get(page.page_type, 0) + 1
     return SeoSiteSignals(
         duplicate_titles={key: urls for key, urls in title_map.items() if len(urls) > 1},
         duplicate_meta_descriptions={key: urls for key, urls in meta_map.items() if len(urls) > 1},
@@ -614,6 +705,14 @@ def build_site_signals(pages: list[SeoPageAnalysis], base: SeoSiteSignals) -> Se
         broken_links=list(dict.fromkeys(broken_links))[:50],
         robots_url=base.robots_url,
         sitemap_urls=base.sitemap_urls,
+        discovered_urls=base.discovered_urls,
+        crawled_urls=len(pages),
+        skipped_urls=base.skipped_urls,
+        blocked_urls=base.blocked_urls,
+        errored_urls=base.errored_urls,
+        platform=platform,
+        platform_confidence=confidence,
+        page_type_counts=page_type_counts,
     )
 
 
@@ -623,34 +722,73 @@ def collect_issues(
     issues: list[SeoIssue] = []
     for page in pages:
         if page.status_code >= 500:
-            issues.append(issue("P0", "server_error", "Server error response", page.url, "Fix 5xx responses."))
+            issues.append(issue("P0", "server_error", "Server error response", page.url, "Fix 5xx responses.", page.platform, str(page.status_code), page.page_type))
         elif page.status_code >= 400:
-            issues.append(issue("P1", "client_error", "Client error response", page.url, "Fix broken page responses."))
+            issues.append(issue("P1", "client_error", "Client error response", page.url, "Fix broken page responses.", page.platform, str(page.status_code), page.page_type))
         issues.extend(page.issues)
     if signals.duplicate_titles:
-        issues.append(issue("P2", "duplicate_titles", "Duplicate page titles found", "", "Write unique titles for each indexable page."))
+        issues.append(issue("P2", "duplicate_titles", "Duplicate page titles found", "", "Write unique titles for each indexable page.", signals.platform, str(len(signals.duplicate_titles)), "site", "site"))
     if signals.duplicate_meta_descriptions:
-        issues.append(issue("P2", "duplicate_meta_descriptions", "Duplicate meta descriptions found", "", "Write unique meta descriptions."))
+        issues.append(issue("P2", "duplicate_meta_descriptions", "Duplicate meta descriptions found", "", "Write unique meta descriptions.", signals.platform, str(len(signals.duplicate_meta_descriptions)), "site", "site"))
     if signals.canonical_mismatches:
-        issues.append(issue("P2", "canonical_mismatch", "Canonical URLs do not match page URLs", "", "Review canonical targets."))
+        issues.append(issue("P2", "canonical_mismatch", "Canonical URLs do not match page URLs", "", "Review canonical targets.", signals.platform, str(len(signals.canonical_mismatches)), "site", "site"))
     for error in crawl_errors:
         if "Unsafe IP" in error or "Localhost" in error or "Redirect left domain" in error:
-            issues.append(issue("P0", "crawl_security_block", error, "", "Use only public same-domain http/https URLs."))
+            issues.append(issue("P0", "crawl_security_block", error, "", "Use only public same-domain http/https URLs.", "generic", error, "unknown", "crawl"))
             break
     return issues
 
 
 def score_audit(issues: list[SeoIssue], pages: list[SeoPageAnalysis]) -> int:
-    score = 100
-    weights = {"P0": 30, "P1": 15, "P2": 7, "P3": 3}
-    for current in issues:
-        score -= weights[current.severity]
     if not pages:
-        score -= 40
-    return max(0, min(100, score))
+        return 0
+    commercial_pages = [page for page in pages if not is_utility_page(page.page_type)] or pages
+    average_page_score = sum(page.page_score or 0 for page in commercial_pages) / len(commercial_pages)
+    site_issues = [current for current in issues if current.scope in {"site", "crawl"}]
+    score = average_page_score
+    seen_codes: set[str] = set()
+    weights = {"P0": 18, "P1": 9, "P2": 4, "P3": 1}
+    for current in site_issues:
+        if current.code in seen_codes and current.severity != "P0":
+            continue
+        seen_codes.add(current.code)
+        score -= weights[current.severity]
+    return max(0, min(100, round(score)))
 
 
-def build_recommendations(issues: list[SeoIssue]) -> list[SeoRecommendation]:
+def score_page(issues: list[SeoIssue], page_type: str) -> tuple[int, list[str]]:
+    score = 100
+    reasons: list[str] = []
+    weights = {"P0": 30, "P1": 15, "P2": 8, "P3": 3}
+    multiplier = 0.35 if is_utility_page(page_type) else 1.0
+    for current in issues:
+        loss = max(1, round(weights[current.severity] * multiplier))
+        score -= loss
+        reasons.append(f"-{loss}: {current.code} ({current.severity})")
+    return max(0, min(100, score)), reasons
+
+
+def score_reasons(issues: list[SeoIssue], pages: list[SeoPageAnalysis]) -> list[str]:
+    reasons: list[str] = []
+    commercial_pages = [page for page in pages if not is_utility_page(page.page_type)] or pages
+    if commercial_pages:
+        average = sum(page.page_score or 0 for page in commercial_pages) / len(commercial_pages)
+        reasons.append(f"Commercial page average: {round(average)} across {len(commercial_pages)} pages")
+    weights = {"P0": 18, "P1": 9, "P2": 4, "P3": 1}
+    seen_codes: set[str] = set()
+    for current in issues:
+        if current.scope not in {"site", "crawl"}:
+            continue
+        if current.code in seen_codes and current.severity != "P0":
+            continue
+        seen_codes.add(current.code)
+        reasons.append(f"-{weights[current.severity]}: {current.code} ({current.severity}, {current.scope})")
+    return reasons
+
+
+def build_recommendations(
+    issues: list[SeoIssue], language: str = "", business_description: str = ""
+) -> list[SeoRecommendation]:
     seen: set[str] = set()
     recs: list[SeoRecommendation] = []
     for current in sorted(issues, key=lambda item: item.severity):
@@ -661,11 +799,31 @@ def build_recommendations(issues: list[SeoIssue]) -> list[SeoRecommendation]:
             SeoRecommendation(
                 priority=current.severity,
                 title=current.message,
-                detail=current.recommendation,
+                detail=localized_recommendation(current, language, business_description),
                 platform_hint=current.platform_hint,
             )
         )
     return recs
+
+
+def localized_recommendation(
+    current: SeoIssue, language: str = "", business_description: str = ""
+) -> str:
+    target_language = language.strip() or "seçilen dil"
+    context = business_description.strip()
+    context_sentence = f" İş bağlamı: {context}." if context else ""
+    detail = current.recommendation
+    if target_language.casefold() in {"czech", "čeština", "česky", "cz", "cs"}:
+        return (
+            f"Heuristic öneri: Bu sayfa için başlık/meta/H1 ve içerik başlıklarını Çekçe "
+            f"hazırla; gerçek mevcut değeri temel al: {current.current_value}. {detail}"
+            f"{context_sentence} Arama hacmi, trafik veya sıralama verisi üretilmedi."
+        )
+    return (
+        f"Heuristic öneri: İçeriği {target_language} hedef dilinde, sayfaya özel mevcut "
+        f"değere göre güncelle: {current.current_value}. {detail}{context_sentence} "
+        "Arama hacmi, trafik veya sıralama verisi üretilmedi."
+    )
 
 
 def render_markdown(audit: SeoAudit) -> str:
@@ -702,14 +860,20 @@ def issue(
     url: str,
     recommendation: str,
     platform_hint: str = "generic",
+    current_value: str = "",
+    page_type: str = "unknown",
+    scope: str = "page",
 ) -> SeoIssue:
     return SeoIssue(
         severity=severity,
         code=code,
         message=message,
         url=url,
-        recommendation=recommendation,
+        recommendation=shopify_recommendation(recommendation, platform_hint) if "Shopify" in platform_hint else recommendation,
         platform_hint=platform_hint,
+        current_value=current_value or "Bulunamadı",
+        page_type=page_type,
+        scope=scope,
     )
 
 
@@ -739,9 +903,75 @@ def prefixed_meta(parser: SeoHtmlParser, attr: str, prefix: str) -> dict[str, st
     return values
 
 
+def classify_page_type(url: str, parser: SeoHtmlParser) -> PageType:
+    parsed = urlparse(url)
+    path = parsed.path.lower().rstrip("/") or "/"
+    query = parsed.query.lower()
+    og_type = next((meta.get("content", "").lower() for meta in parser.meta if meta.get("property", "").lower() == "og:type"), "")
+    if path == "/":
+        return "homepage"
+    if any(part in path for part in ["/cart", "/checkout"]):
+        return "cart"
+    if any(part in path for part in ["/account", "/login", "/register"]):
+        return "account"
+    if "search" in path or "q=" in query:
+        return "search"
+    if any(part in path for part in ["policy", "privacy", "terms", "obchodni-podminky", "gdpr"]):
+        return "policy"
+    if "/products/" in path or og_type == "product":
+        return "product"
+    if "/collections/" in path or "/category/" in path or "/collections" == path:
+        return "collection"
+    if "/blogs/" in path or "/blog/" in path or og_type == "article":
+        return "blog/article"
+    if path != "/":
+        return "content page"
+    return "unknown"
+
+
+def is_utility_page(page_type: str) -> bool:
+    return page_type in {"cart", "account", "policy", "search"}
+
+
+def detect_platform(html_text: str, parser: SeoHtmlParser) -> tuple[str, str]:
+    lower = html_text.lower()
+    signals = [
+        "cdn.shopify.com" in lower,
+        "shopify" in lower,
+        "shopify-features" in lower,
+        any("shopify" in script.get("src", "").lower() for script in parser.scripts),
+        any("/products/" in link.get("href", "").lower() for link in parser.links),
+        any("/collections/" in link.get("href", "").lower() for link in parser.links),
+    ]
+    count = sum(1 for signal in signals if signal)
+    if count >= 2:
+        return "Shopify", "confirmed"
+    if count == 1:
+        return "Muhtemelen Shopify", "probable"
+    return "unknown", "unknown"
+
+
+def aggregate_platform(pages: list[SeoPageAnalysis]) -> tuple[str, str]:
+    if any(page.platform == "Shopify" for page in pages):
+        return "Shopify", "confirmed"
+    if any(page.platform == "Muhtemelen Shopify" for page in pages):
+        return "Muhtemelen Shopify", "probable"
+    return "unknown", "unknown"
+
+
+def visible_word_count(text: str) -> int:
+    return len(re.findall(r"[\wÀ-ž]+", text, flags=re.UNICODE))
+
+
+def shopify_recommendation(recommendation: str, platform_hint: str) -> str:
+    if "Shopify" not in platform_hint:
+        return recommendation
+    return f"Shopify Admin > Products/Collections/Pages > Search engine listing alanında uygula. {recommendation}"
+
+
 def _decode_body(body: bytes) -> str:
     return body.decode("utf-8", errors="replace")
 
 
 def _clean_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+    return re.sub(r"\s+", " ", unescape(value)).strip()

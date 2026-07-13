@@ -23,6 +23,9 @@ async def create_seo_audit(request: SeoAuditRequest) -> SeoAuditSummary:
         audit = await service.create_audit(
             url=str(request.url),
             max_pages=request.max_pages,
+            country=request.country,
+            language=request.language,
+            business_description=request.business_description,
             include_ai_recommendations=request.include_ai_recommendations,
         )
     except SeoAuditError as exc:

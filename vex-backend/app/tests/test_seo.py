@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import http.client
-import http.client
 import ipaddress
 import tempfile
 import unittest
@@ -233,6 +232,136 @@ class SeoAnalysisTests(unittest.TestCase):
         self.assertIn("missing_h1", codes)
         recs = build_recommendations(issues)
         self.assertTrue(all(rec.platform_hint == "generic" for rec in recs))
+
+    def test_mspovleceni_shopify_homepage_fixture(self) -> None:
+        html = """
+        <html lang="cs"><head>
+          <title>mSpovleceni | Nakupujte kvalitní povlečení a bytový textil online</title>
+          <meta name="description" content="Kvalitní povlečení, prostěradla a bytový textil online.">
+          <meta name="robots" content="index,follow">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <link rel="canonical" href="https://mspovleceni.cz/">
+          <script>var Shopify = {shop: "mspovleceni.myshopify.com"}; var productJson = {"body_html":"should not count"};</script>
+          <script type="application/ld+json">{"@type":"Organization","description":"should not count"}</script>
+        </head><body>
+          <nav>Menu Povlečení Košík Účet</nav>
+          <main><h1>Kvalitní povlečení a bytový textil</h1>
+          <p>Nakupujte bavlněné povlečení prostěradla ručníky deky polštáře a další bytový textil pro pohodlný spánek.</p></main>
+          <footer>Kontakt Obchodní podmínky</footer>
+          <a href="/collections/povleceni?utm_source=x">Povlečení</a>
+          <a href="/products/bavlnene-povleceni">Produkt</a>
+        </body></html>
+        """
+        pages = analyze_fetches([FetchResult("https://mspovleceni.cz/", 200, "text/html", html.encode(), "https://mspovleceni.cz/")])
+        page = pages[0]
+        self.assertEqual(page.title, "mSpovleceni | Nakupujte kvalitní povlečení a bytový textil online")
+        self.assertEqual(page.h1, ["Kvalitní povlečení a bytový textil"])
+        self.assertEqual(page.canonical, "https://mspovleceni.cz/")
+        self.assertEqual(page.robots, "index,follow")
+        self.assertEqual(page.page_type, "homepage")
+        self.assertEqual(page.platform, "Shopify")
+        self.assertGreater(page.word_count, 10)
+        self.assertLess(page.word_count, 30)
+        self.assertNotIn("missing_title", [issue.code for issue in page.issues])
+        self.assertIsNotNone(page.page_score)
+
+    def test_mspovleceni_collection_product_and_utility_fixtures(self) -> None:
+        collection_html = """
+        <html><head><title>Bavlněné povlečení | mSpovleceni</title><meta name="description" content="Vyberte si kvalitní bavlněné povlečení."><link rel="canonical" href="https://mspovleceni.cz/collections/bavlnene-povleceni"><meta name="viewport" content="width=device-width"></head>
+        <body><main><h1>Bavlněné povlečení</h1><p>Kolekce obsahuje moderní vzory a kvalitní materiály pro každou ložnici.</p></main><script src="https://cdn.shopify.com/shopifycloud.js"></script></body></html>
+        """
+        product_html = """
+        <html><head><title>Luxusní bavlněné povlečení modré | mSpovleceni</title><meta property="og:type" content="product"><meta name="description" content="Luxusní modré bavlněné povlečení pro pohodlný spánek."><link rel="canonical" href="https://mspovleceni.cz/products/luxusni-povleceni"><meta name="viewport" content="width=device-width"></head>
+        <body><main><h1>Luxusní bavlněné povlečení modré</h1><p>Produktový popis vysvětluje materiál rozměry údržbu a výhody povlečení.</p><img src="x.jpg"></main></body></html>
+        """
+        cart_html = "<html><head><title>Košík</title><meta name='robots' content='noindex'></head><body><main><h1>Košík</h1></main></body></html>"
+        pages = analyze_fetches([
+            FetchResult("https://mspovleceni.cz/collections/bavlnene-povleceni", 200, "text/html", collection_html.encode(), "https://mspovleceni.cz/collections/bavlnene-povleceni"),
+            FetchResult("https://mspovleceni.cz/products/luxusni-povleceni", 200, "text/html", product_html.encode(), "https://mspovleceni.cz/products/luxusni-povleceni"),
+            FetchResult("https://mspovleceni.cz/cart", 200, "text/html", cart_html.encode(), "https://mspovleceni.cz/cart"),
+        ])
+        self.assertEqual(pages[0].page_type, "collection")
+        self.assertEqual(pages[1].page_type, "product")
+        self.assertEqual(pages[2].page_type, "cart")
+        self.assertGreater(pages[2].page_score or 0, 70)
+        signals = build_site_signals(pages, SeoSiteSignals(discovered_urls=500, skipped_urls=3, blocked_urls=1, errored_urls=2))
+        issues = collect_issues(pages, signals, [])
+        self.assertEqual(signals.platform, "Shopify")
+        self.assertEqual(signals.page_type_counts["collection"], 1)
+        self.assertGreater(score_audit(issues, pages), 50)
+
+    def test_500_page_limit_and_duplicate_normalization(self) -> None:
+        valid = SeoAuditRequest(url="https://example.com", max_pages=500)
+        self.assertEqual(valid.max_pages, 500)
+        with self.assertRaises(Exception):
+            SeoAuditRequest(url="https://example.com", max_pages=501)
+        self.assertEqual(normalize_url("https://example.com/a?utm_source=x&b=2#frag"), "https://example.com/a?b=2")
+        self.assertEqual(normalize_url("https://example.com/a?b=2"), "https://example.com/a?b=2")
+
+    def test_mspovleceni_shopify_homepage_fixture(self) -> None:
+        html = """
+        <html lang="cs"><head>
+          <title>mSpovleceni | Nakupujte kvalitní povlečení a bytový textil online</title>
+          <meta name="description" content="Kvalitní povlečení, prostěradla a bytový textil online.">
+          <meta name="robots" content="index,follow">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <link rel="canonical" href="https://mspovleceni.cz/">
+          <script>var Shopify = {shop: "mspovleceni.myshopify.com"}; var productJson = {"body_html":"should not count"};</script>
+          <script type="application/ld+json">{"@type":"Organization","description":"should not count"}</script>
+        </head><body>
+          <nav>Menu Povlečení Košík Účet</nav>
+          <main><h1>Kvalitní povlečení a bytový textil</h1>
+          <p>Nakupujte bavlněné povlečení prostěradla ručníky deky polštáře a další bytový textil pro pohodlný spánek.</p></main>
+          <footer>Kontakt Obchodní podmínky</footer>
+          <a href="/collections/povleceni?utm_source=x">Povlečení</a>
+          <a href="/products/bavlnene-povleceni">Produkt</a>
+        </body></html>
+        """
+        pages = analyze_fetches([FetchResult("https://mspovleceni.cz/", 200, "text/html", html.encode(), "https://mspovleceni.cz/")])
+        page = pages[0]
+        self.assertEqual(page.title, "mSpovleceni | Nakupujte kvalitní povlečení a bytový textil online")
+        self.assertEqual(page.h1, ["Kvalitní povlečení a bytový textil"])
+        self.assertEqual(page.canonical, "https://mspovleceni.cz/")
+        self.assertEqual(page.robots, "index,follow")
+        self.assertEqual(page.page_type, "homepage")
+        self.assertEqual(page.platform, "Shopify")
+        self.assertGreater(page.word_count, 10)
+        self.assertLess(page.word_count, 30)
+        self.assertNotIn("missing_title", [issue.code for issue in page.issues])
+        self.assertIsNotNone(page.page_score)
+
+    def test_mspovleceni_collection_product_and_utility_fixtures(self) -> None:
+        collection_html = """
+        <html><head><title>Bavlněné povlečení | mSpovleceni</title><meta name="description" content="Vyberte si kvalitní bavlněné povlečení."><link rel="canonical" href="https://mspovleceni.cz/collections/bavlnene-povleceni"><meta name="viewport" content="width=device-width"></head>
+        <body><main><h1>Bavlněné povlečení</h1><p>Kolekce obsahuje moderní vzory a kvalitní materiály pro každou ložnici.</p></main><script src="https://cdn.shopify.com/shopifycloud.js"></script></body></html>
+        """
+        product_html = """
+        <html><head><title>Luxusní bavlněné povlečení modré | mSpovleceni</title><meta property="og:type" content="product"><meta name="description" content="Luxusní modré bavlněné povlečení pro pohodlný spánek."><link rel="canonical" href="https://mspovleceni.cz/products/luxusni-povleceni"><meta name="viewport" content="width=device-width"></head>
+        <body><main><h1>Luxusní bavlněné povlečení modré</h1><p>Produktový popis vysvětluje materiál rozměry údržbu a výhody povlečení.</p><img src="x.jpg"></main></body></html>
+        """
+        cart_html = "<html><head><title>Košík</title><meta name='robots' content='noindex'></head><body><main><h1>Košík</h1></main></body></html>"
+        pages = analyze_fetches([
+            FetchResult("https://mspovleceni.cz/collections/bavlnene-povleceni", 200, "text/html", collection_html.encode(), "https://mspovleceni.cz/collections/bavlnene-povleceni"),
+            FetchResult("https://mspovleceni.cz/products/luxusni-povleceni", 200, "text/html", product_html.encode(), "https://mspovleceni.cz/products/luxusni-povleceni"),
+            FetchResult("https://mspovleceni.cz/cart", 200, "text/html", cart_html.encode(), "https://mspovleceni.cz/cart"),
+        ])
+        self.assertEqual(pages[0].page_type, "collection")
+        self.assertEqual(pages[1].page_type, "product")
+        self.assertEqual(pages[2].page_type, "cart")
+        self.assertGreater(pages[2].page_score or 0, 70)
+        signals = build_site_signals(pages, SeoSiteSignals(discovered_urls=500, skipped_urls=3, blocked_urls=1, errored_urls=2))
+        issues = collect_issues(pages, signals, [])
+        self.assertEqual(signals.platform, "Shopify")
+        self.assertEqual(signals.page_type_counts["collection"], 1)
+        self.assertGreater(score_audit(issues, pages), 50)
+
+    def test_500_page_limit_and_duplicate_normalization(self) -> None:
+        valid = SeoAuditRequest(url="https://example.com", max_pages=500)
+        self.assertEqual(valid.max_pages, 500)
+        with self.assertRaises(Exception):
+            SeoAuditRequest(url="https://example.com", max_pages=501)
+        self.assertEqual(normalize_url("https://example.com/a?utm_source=x&b=2#frag"), "https://example.com/a?b=2")
+        self.assertEqual(normalize_url("https://example.com/a?b=2"), "https://example.com/a?b=2")
 
 
 class SeoStorageExportTests(unittest.IsolatedAsyncioTestCase):
