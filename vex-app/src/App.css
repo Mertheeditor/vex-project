@@ -963,3 +963,619 @@ input {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.seo-page {
+  flex: 1;
+  padding: 32px;
+  overflow: auto;
+}
+
+.seo-form {
+  margin-bottom: 20px;
+}
+
+.seo-muted {
+  margin: 8px 0 0;
+  color: #aeb7c8;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.seo-form-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.seo-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.seo-stage {
+  min-height: 96px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.seo-stage span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: rgba(31, 111, 224, 0.24);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.seo-stage strong,
+.seo-stage small {
+  display: block;
+}
+
+.seo-stage strong {
+  color: #f5f7fb;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.seo-stage small {
+  margin-top: 6px;
+  color: #8d96aa;
+}
+
+.seo-stage-active {
+  border-color: rgba(47, 141, 255, 0.52);
+  background: rgba(31, 111, 224, 0.14);
+}
+
+.seo-stage-done,
+.seo-stage-completed {
+  border-color: rgba(57, 210, 130, 0.38);
+  background: rgba(57, 210, 130, 0.1);
+}
+
+.seo-stage-partial {
+  border-color: rgba(255, 204, 102, 0.42);
+  background: rgba(255, 204, 102, 0.1);
+}
+
+.seo-error-card {
+  border-color: rgba(255, 92, 92, 0.42);
+  background: rgba(255, 92, 92, 0.1);
+}
+
+.seo-error-card p {
+  margin: 8px 0 0;
+  color: #ffd2d2;
+  line-height: 1.5;
+}
+
+.seo-status-url_error,
+.seo-status-unreachable,
+.seo-status-backend_error {
+  border-color: rgba(255, 92, 92, 0.42);
+  color: #ffd2d2;
+  background: rgba(255, 92, 92, 0.14);
+}
+
+.seo-status-loading,
+.seo-status-crawling,
+.seo-status-partial,
+.seo-status-empty {
+  border-color: rgba(255, 204, 102, 0.42);
+  color: #ffe6a6;
+  background: rgba(255, 204, 102, 0.14);
+}
+
+.seo-status-completed {
+  border-color: rgba(57, 210, 130, 0.42);
+  color: #cdf9df;
+  background: rgba(57, 210, 130, 0.12);
+}
+
+.seo-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.seo-summary-card {
+  min-height: 112px;
+}
+
+.seo-summary-card h3 {
+  font-size: 30px;
+}
+
+.seo-summary-critical {
+  border-color: rgba(255, 92, 92, 0.38);
+}
+
+.seo-summary-warning {
+  border-color: rgba(255, 204, 102, 0.38);
+}
+
+.seo-results-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+
+.seo-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.seo-tab {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 10px 12px;
+  color: #aeb7c8;
+  background: rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.seo-tab.active,
+.seo-tab:hover {
+  border-color: rgba(47, 141, 255, 0.42);
+  color: #ffffff;
+  background: rgba(31, 111, 224, 0.18);
+}
+
+.seo-tab-panel {
+  padding: 20px;
+}
+
+.seo-issue-list,
+.seo-list-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.seo-issue-card h3 {
+  font-size: 20px;
+}
+
+.seo-issue-details {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.seo-issue-details dt {
+  color: #8d96aa;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.seo-issue-details dd {
+  margin: 0;
+  color: #d7deeb;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.seo-empty-text {
+  padding: 18px;
+}
+
+.seo-pages-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px;
+}
+
+.seo-table-wrap {
+  overflow: auto;
+}
+
+.seo-pages-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  color: #d7deeb;
+}
+
+.seo-pages-table th,
+.seo-pages-table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  text-align: left;
+  vertical-align: top;
+}
+
+.seo-pages-table th {
+  color: #8d96aa;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.seo-pages-table td {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.seo-pages-table tr {
+  cursor: pointer;
+}
+
+.seo-pages-table tbody tr:hover,
+.seo-pages-table tbody tr.selected {
+  background: rgba(31, 111, 224, 0.12);
+}
+
+.seo-detail-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.seo-detail-panel h3 {
+  margin: 0 0 14px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1280px) {
+  .seo-stage-strip,
+  .seo-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .seo-pages-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .work-panel {
+    border: 0;
+  }
+
+  .seo-stage-strip,
+  .seo-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.seo-page {
+  flex: 1;
+  padding: 32px;
+  overflow: auto;
+}
+
+.seo-form {
+  margin-bottom: 20px;
+}
+
+.seo-muted {
+  margin: 8px 0 0;
+  color: #aeb7c8;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.seo-form-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.seo-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.seo-stage {
+  min-height: 96px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.seo-stage span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: rgba(31, 111, 224, 0.24);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.seo-stage strong,
+.seo-stage small {
+  display: block;
+}
+
+.seo-stage strong {
+  color: #f5f7fb;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.seo-stage small {
+  margin-top: 6px;
+  color: #8d96aa;
+}
+
+.seo-stage-active {
+  border-color: rgba(47, 141, 255, 0.52);
+  background: rgba(31, 111, 224, 0.14);
+}
+
+.seo-stage-done,
+.seo-stage-completed {
+  border-color: rgba(57, 210, 130, 0.38);
+  background: rgba(57, 210, 130, 0.1);
+}
+
+.seo-stage-partial {
+  border-color: rgba(255, 204, 102, 0.42);
+  background: rgba(255, 204, 102, 0.1);
+}
+
+.seo-error-card {
+  border-color: rgba(255, 92, 92, 0.42);
+  background: rgba(255, 92, 92, 0.1);
+}
+
+.seo-error-card p {
+  margin: 8px 0 0;
+  color: #ffd2d2;
+  line-height: 1.5;
+}
+
+.seo-status-url_error,
+.seo-status-unreachable,
+.seo-status-backend_error {
+  border-color: rgba(255, 92, 92, 0.42);
+  color: #ffd2d2;
+  background: rgba(255, 92, 92, 0.14);
+}
+
+.seo-status-loading,
+.seo-status-crawling,
+.seo-status-partial,
+.seo-status-empty {
+  border-color: rgba(255, 204, 102, 0.42);
+  color: #ffe6a6;
+  background: rgba(255, 204, 102, 0.14);
+}
+
+.seo-status-completed {
+  border-color: rgba(57, 210, 130, 0.42);
+  color: #cdf9df;
+  background: rgba(57, 210, 130, 0.12);
+}
+
+.seo-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.seo-summary-card {
+  min-height: 112px;
+}
+
+.seo-summary-card h3 {
+  font-size: 30px;
+}
+
+.seo-summary-critical {
+  border-color: rgba(255, 92, 92, 0.38);
+}
+
+.seo-summary-warning {
+  border-color: rgba(255, 204, 102, 0.38);
+}
+
+.seo-results-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+
+.seo-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.seo-tab {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 10px 12px;
+  color: #aeb7c8;
+  background: rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.seo-tab.active,
+.seo-tab:hover {
+  border-color: rgba(47, 141, 255, 0.42);
+  color: #ffffff;
+  background: rgba(31, 111, 224, 0.18);
+}
+
+.seo-tab-panel {
+  padding: 20px;
+}
+
+.seo-issue-list,
+.seo-list-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.seo-issue-card h3 {
+  font-size: 20px;
+}
+
+.seo-issue-details {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.seo-issue-details dt {
+  color: #8d96aa;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.seo-issue-details dd {
+  margin: 0;
+  color: #d7deeb;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.seo-empty-text {
+  padding: 18px;
+}
+
+.seo-pages-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px;
+}
+
+.seo-table-wrap {
+  overflow: auto;
+}
+
+.seo-pages-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  color: #d7deeb;
+}
+
+.seo-pages-table th,
+.seo-pages-table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  text-align: left;
+  vertical-align: top;
+}
+
+.seo-pages-table th {
+  color: #8d96aa;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.seo-pages-table td {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.seo-pages-table tr {
+  cursor: pointer;
+}
+
+.seo-pages-table tbody tr:hover,
+.seo-pages-table tbody tr.selected {
+  background: rgba(31, 111, 224, 0.12);
+}
+
+.seo-detail-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.seo-detail-panel h3 {
+  margin: 0 0 14px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1280px) {
+  .seo-stage-strip,
+  .seo-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .seo-pages-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .work-panel {
+    border: 0;
+  }
+
+  .seo-stage-strip,
+  .seo-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
