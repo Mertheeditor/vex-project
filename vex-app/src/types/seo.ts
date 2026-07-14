@@ -1,3 +1,323 @@
+// Core SEO types matching backend seo_core.py contracts
+// These are the canonical types shared between frontend and backend
+
+export type IssueSeverity = "P0" | "P1" | "P2" | "P3";
+
+export type IssueCategory =
+  | "technical"
+  | "content"
+  | "on_page"
+  | "technical_seo"
+  | "performance"
+  | "mobile"
+  | "structured_data"
+  | "international"
+  | "ecommerce"
+  | "security"
+  | "accessibility"
+  | "links"
+  | "images";
+
+export type PageType =
+  | "homepage"
+  | "collection"
+  | "product"
+  | "blog_article"
+  | "content_page"
+  | "cart"
+  | "account"
+  | "policy"
+  | "search"
+  | "unknown"
+  | "category"
+  | "tag"
+  | "author"
+  | "archive"
+  | "landing"
+  | "thank_you"
+  | "404"
+  | "500";
+
+export type CrawlStatus =
+  | "pending"
+  | "queued"
+  | "crawling"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "blocked"
+  | "redirected"
+  | "timeout"
+  | "error";
+
+export type IndexabilityStatus =
+  | "indexable"
+  | "noindex"
+  | "canonicalized"
+  | "redirected"
+  | "blocked_robots"
+  | "blocked_robots_txt"
+  | "noindex_nofollow"
+  | "canonical_mismatch"
+  | "unknown";
+
+export type RedirectType =
+  | "301"
+  | "302"
+  | "303"
+  | "307"
+  | "308"
+  | "meta_refresh"
+  | "js_redirect"
+  | "unknown";
+
+export type StructuredDataType =
+  | "WebSite"
+  | "Organization"
+  | "LocalBusiness"
+  | "Product"
+  | "ProductGroup"
+  | "BlogPosting"
+  | "Article"
+  | "NewsArticle"
+  | "BreadcrumbList"
+  | "ItemList"
+  | "FAQPage"
+  | "HowTo"
+  | "VideoObject"
+  | "ImageObject"
+  | "Person"
+  | "Brand"
+  | "Offer"
+  | "AggregateRating"
+  | "Review"
+  | "WebPage"
+  | "CollectionPage"
+  | "ProductPage"
+  | "Blog"
+  | "SiteNavigationElement"
+  | "Table"
+  | "DataSet"
+  | "SoftwareApplication"
+  | "MobileApplication"
+  | "WebApplication"
+  | "Service"
+  | "Event"
+  | "Course"
+  | "JobPosting"
+  | "FAQ"
+  | "HowToSection"
+  | "HowToStep"
+  | "unknown";
+
+export type CoreWebVitalsMetric = "LCP" | "FID" | "CLS" | "INP" | "FCP" | "TTFB";
+
+export type CWVRating = "good" | "needs_improvement" | "poor";
+
+export type HttpStatusCategory = "1xx" | "2xx" | "3xx" | "4xx" | "5xx";
+
+// Crawl Configuration
+export interface CrawlConfig {
+  start_url: string;
+  max_pages: number;
+  max_depth: number;
+  follow_redirects: boolean;
+  max_redirects: number;
+  respect_robots_txt: boolean;
+  respect_nofollow: boolean;
+  respect_noindex: boolean;
+  crawl_subdomains: boolean;
+  crawl_external_links: boolean;
+  allowed_domains: string[];
+  blocked_domains: string[];
+  allowed_paths: string[];
+  blocked_paths: string[];
+  user_agent: string;
+  request_timeout: number;
+  max_concurrent: number;
+  delay_between_requests: number;
+  render_javascript: boolean;
+  wait_for_network_idle: boolean;
+  wait_for_selector: string | null;
+  screenshot_on_error: boolean;
+  custom_headers: Record<string, string>;
+  cookies: Record<string, string>;
+  auth: Record<string, string> | null;
+  country: string;
+  language: string;
+  viewport_width: number;
+  viewport_height: number;
+  business_description: string;
+  include_ai_recommendations: boolean;
+  ai_model: string;
+  max_ai_tokens: number;
+  prioritize_urls: string[];
+  max_content_length: number;
+  extract_structured_data: boolean;
+  extract_performance_metrics: boolean;
+  extract_accessibility: boolean;
+  extract_security_headers: boolean;
+  follow_canonical: boolean;
+  follow_pagination: boolean;
+  max_pagination_pages: number;
+}
+
+// Core SEO Issue
+export interface SeoIssueCore {
+  id: string;
+  severity: IssueSeverity;
+  category: IssueCategory;
+  code: string;
+  message: string;
+  description: string;
+  recommendation: string;
+  url: string;
+  page_type: PageType;
+  scope: "page" | "site" | "crawl" | "pattern";
+  affected_urls: string[];
+  current_value: string;
+  expected_value: string;
+  platform_hint: string;
+  confidence: number;
+  impact_score: number;
+  effort_score: number;
+  tags: string[];
+  references: string[];
+  detected_at: string;
+  is_auto_fixable: boolean;
+  auto_fix_suggestion: string;
+}
+
+// SEO Recommendation
+export interface SeoRecommendationCore {
+  id: string;
+  priority: IssueSeverity;
+  category: IssueCategory;
+  title: string;
+  description: string;
+  detailed_explanation: string;
+  impact: "critical" | "high" | "medium" | "low";
+  effort: "low" | "medium" | "high" | "very_high";
+  urls_affected: string[];
+  page_types_affected: PageType[];
+  platform_hint: string;
+  implementation_steps: string[];
+  code_examples: Record<string, string>;
+  tools_to_verify: string[];
+  related_issues: string[];
+  estimated_impact_score: number;
+  confidence: number;
+  ai_generated: boolean;
+  ai_model: string | null;
+  created_at: string;
+}
+
+// Page Score Breakdown
+export interface PageScoreBreakdown {
+  overall: number;
+  technical: number;
+  content: number;
+  on_page: number;
+  performance: number;
+  mobile: number;
+  structured_data: number;
+  links: number;
+  images: number;
+  security: number;
+  accessibility: number;
+  factors: string[];
+  penalties: string[];
+  bonuses: string[];
+}
+
+// Site Score Breakdown
+export interface SiteScoreBreakdown {
+  overall: number;
+  technical_health: number;
+  content_quality: number;
+  on_page_optimization: number;
+  site_architecture: number;
+  crawlability: number;
+  indexability: number;
+  performance: number;
+  mobile_usability: number;
+  structured_data_coverage: number;
+  internal_linking: number;
+  international_seo: number;
+  security: number;
+  factors: string[];
+  critical_issues: number;
+  high_issues: number;
+  medium_issues: number;
+  low_issues: number;
+}
+
+// SEO Project (new shared type)
+export interface SeoProject {
+  id: string;
+  name: string;
+  domain: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  settings: {
+    max_pages: number;
+    max_depth: number;
+    crawl_config?: Partial<CrawlConfig>;
+  };
+  audit_history: SeoAuditHistoryItem[];
+  active_audit_id: string | null;
+  last_audit_at: string | null;
+  last_score: number | null;
+}
+
+export interface SeoAuditHistoryItem {
+  audit_id: string;
+  score: number;
+  crawled_pages: number;
+  completed_at: string;
+}
+
+// Capabilities response
+export interface SeoCapabilities {
+  max_pages_per_audit: number;
+  max_depth: number;
+  max_concurrent_requests: number;
+  supported_page_types: PageType[];
+  issue_severities: IssueSeverity[];
+  issue_categories: IssueCategory[];
+  crawl_statuses: CrawlStatus[];
+  indexability_statuses: IndexabilityStatus[];
+  redirect_types: RedirectType[];
+  structured_data_types: StructuredDataType[];
+  core_web_vitals_metrics: CoreWebVitalsMetric[];
+  cwv_ratings: CWVRating[];
+  http_status_categories: HttpStatusCategory[];
+  supported_export_formats: string[];
+  supported_report_templates: string[];
+  ai_models: string[];
+  features: Record<string, boolean>;
+}
+
+// Provider status
+export interface ProviderStatus {
+  google_search_console: ProviderInfo;
+  google_analytics: ProviderInfo;
+  ahrefs: ProviderInfo;
+  semrush: ProviderInfo;
+  screaming_frog: ProviderInfo;
+  sitebulb: ProviderInfo;
+}
+
+export interface ProviderInfo {
+  configured: boolean;
+  connected: boolean;
+  last_sync: string | null;
+  error: string | null;
+  scopes: string[];
+}
+
+// Re-export existing types for compatibility
 export type SeoAuditStageKey =
   | "connection"
   | "robots_sitemap"
@@ -18,7 +338,7 @@ export type SeoAuditStatus =
   | "backend_error"
   | "empty";
 
-export type SeoIssuePriority = "P0" | "P1" | "P2" | "P3" | string;
+export type SeoIssuePriority = IssueSeverity;
 
 export interface SeoAuditRequest {
   url: string;

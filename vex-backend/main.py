@@ -16,6 +16,7 @@ from app.routes import (
     reminders,
     screen,
     seo,
+    seo_projects,
     shopify,
     site,
     speech,
@@ -62,5 +63,6 @@ app.include_router(screen.router)
 app.include_router(computer.router)
 app.include_router(site.router)
 app.include_router(seo.router)
+app.include_router(seo_projects.router)
 app.include_router(shopify.router)
 app.include_router(evolution.router)
