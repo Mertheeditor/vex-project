@@ -317,6 +317,97 @@ export interface ProviderInfo {
   scopes: string[];
 }
 
+// Site Audit Workspace types
+export interface AuditComparison {
+  baseline_audit_id: string;
+  comparison_audit_id: string;
+  baseline_date: string;
+  comparison_date: string;
+  score_change: number;
+  score_change_pct: number;
+  issues_resolved: number;
+  issues_new: number;
+  issues_worsened: number;
+  issues_improved: number;
+  pages_improved: number;
+  pages_declined: number;
+  top_improvements: string[];
+  top_regressions: string[];
+  category_changes: Record<string, number>;
+}
+
+export interface AuditProgress {
+  audit_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  progress_pct: number;
+  current_url: string;
+  current_depth: number;
+  urls_queued: number;
+  urls_crawled: number;
+  urls_failed: number;
+  urls_skipped: number;
+  elapsed_seconds: number;
+  estimated_remaining_seconds: number | null;
+  pages_per_second: number;
+  recent_errors: Array<Record<string, unknown>>;
+  timestamp: string;
+}
+
+export interface SeoAudit {
+  id: string;
+  requested_url: string;
+  normalized_url: string;
+  status: "completed" | "failed" | "running" | "pending";
+  created_at: string;
+  max_pages: number;
+  crawled_pages: number;
+  score: number;
+  project_id: string | null;
+  issues: SeoIssue[];
+  recommendations: Array<{
+    priority: string;
+    title: string;
+    detail: string;
+    platform_hint: string;
+  }>;
+  pages: SeoAuditPage[];
+  site_signals: Record<string, unknown>;
+  crawl_errors: string[];
+  ai_recommendations: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+  progress: AuditProgress | null;
+}
+
+export interface AuditListParams {
+  page?: number;
+  page_size?: number;
+  status?: string[];
+  project_id?: string;
+  date_from?: string;
+  date_to?: string;
+  min_score?: number;
+  max_score?: number;
+  search?: string;
+  sort_by?: "created_at" | "score" | "crawled_pages" | "status";
+  sort_order?: "asc" | "desc";
+}
+
+export interface AuditListResponse {
+  audits: SeoAudit[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+export interface ExportFormat {
+  format: "csv" | "json" | "markdown";
+  type: "issues" | "pages" | "both";
+  include_details: boolean;
+}
+
 // Re-export existing types for compatibility
 export type SeoAuditStageKey =
   | "connection"
@@ -340,12 +431,16 @@ export type SeoAuditStatus =
 
 export type SeoIssuePriority = IssueSeverity;
 
+// Frontend type alias for SeoAuditIssue compatibility
+export type SeoIssue = SeoAuditIssue;
+
 export interface SeoAuditRequest {
   url: string;
   country: string;
   language: string;
   business_description: string;
   max_pages: number;
+  project_id?: string;
 }
 
 export interface SeoCrawlStats {

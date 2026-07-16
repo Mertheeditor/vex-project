@@ -4,7 +4,34 @@ import type {
   SeoAuditRequest,
   SeoAuditResult,
   SeoIssuePriority,
+  AuditComparison,
+  AuditProgress,
+  AuditListParams,
+  AuditListResponse,
+  ExportFormat,
+  SeoProject,
+  SeoCapabilities,
+  ProviderStatus,
+  SeoIssue,
 } from "../types/seo";
+
+// Re-export types for consumers
+export type {
+  SeoAuditIssue,
+  SeoAuditPage,
+  SeoAuditRequest,
+  SeoAuditResult,
+  SeoIssuePriority,
+  AuditComparison,
+  AuditProgress,
+  AuditListParams,
+  AuditListResponse,
+  ExportFormat,
+  SeoProject,
+  SeoCapabilities,
+  ProviderStatus,
+  SeoIssue,
+};
 
 const SEO_API_BASE = "http://127.0.0.1:8000/seo/audits";
 
@@ -42,6 +69,7 @@ export async function createSeoAudit(request: SeoAuditRequest): Promise<SeoAudit
       language: request.language,
       business_description: request.business_description,
       max_pages: request.max_pages,
+      project_id: request.project_id,
     }),
   });
 
@@ -238,4 +266,89 @@ function nullableNumberValue(value: unknown) {
 
 function booleanValue(value: unknown) {
   return typeof value === "boolean" ? value : false;
+}
+
+// List audits with pagination and filtering
+export async function fetchAuditHistory(params: AuditListParams = {}): Promise<AuditListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.page) searchParams.set("page", String(params.page));
+  if (params.page_size) searchParams.set("page_size", String(params.page_size));
+  if (params.status) searchParams.set("status", params.status.join(","));
+  if (params.project_id) searchParams.set("project_id", params.project_id);
+  if (params.date_from) searchParams.set("date_from", params.date_from);
+  if (params.date_to) searchParams.set("date_to", params.date_to);
+  if (params.min_score !== undefined) searchParams.set("min_score", String(params.min_score));
+  if (params.max_score !== undefined) searchParams.set("max_score", String(params.max_score));
+  if (params.search) searchParams.set("search", params.search);
+  if (params.sort_by) searchParams.set("sort_by", params.sort_by);
+  if (params.sort_order) searchParams.set("sort_order", params.sort_order);
+
+  const response = await fetch(`${SEO_API_BASE}?${searchParams.toString()}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+// Compare two audits
+export async function compareAudits(currentAuditId: string, baselineAuditId: string): Promise<AuditComparison> {
+  const response = await fetch(`${SEO_API_BASE}/${currentAuditId}/compare?baseline_id=${baselineAuditId}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+// Get audit progress for polling
+export async function fetchAuditProgress(auditId: string): Promise<AuditProgress> {
+  const response = await fetch(`${SEO_API_BASE}/${auditId}/progress`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+// Export audit as CSV
+export async function exportAuditCsv(
+  auditId: string,
+  type: "issues" | "pages" | "both" = "issues"
+): Promise<string> {
+  const response = await fetch(`${SEO_API_BASE}/${auditId}/export/csv?type=${type}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
+// Download audit CSV export
+export async function downloadAuditCsv(auditId: string, type: "issues" | "pages" | "both" = "issues"): Promise<void> {
+  const response = await fetch(`${SEO_API_BASE}/${auditId}/export/csv?type=${type}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `seo-audit-${auditId}-${type}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Poll audit progress until completion
+export async function pollAuditProgress(
+  auditId: string,
+  onProgress: (progress: AuditProgress) => void,
+  intervalMs = 2000,
+  timeoutMs = 300000
+): Promise<AuditProgress> {
+  const startTime = Date.now();
+
+  while (true) {
+    const progress = await fetchAuditProgress(auditId);
+    onProgress(progress);
+
+    if (progress.status === "completed" || progress.status === "failed") {
+      return progress;
+    }
+
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error("Audit progress polling timeout");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }

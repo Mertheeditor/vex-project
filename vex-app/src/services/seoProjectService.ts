@@ -7,6 +7,10 @@ import type {
   ProviderStatus,
   ProviderInfo,
   CrawlConfig,
+  SeoAuditRequest,
+  AuditListParams,
+  AuditListResponse,
+  SeoAudit,
 } from "../types/seo";
 
 const API_BASE = "http://127.0.0.1:8000/seo/projects";
@@ -37,6 +41,8 @@ export const SeoProjectService = {
     max_pages?: number;
     max_depth?: number;
     crawl_config?: Partial<CrawlConfig>;
+    country?: string;
+    language?: string;
   }): Promise<SeoProject> {
     return fetchJson<SeoProject>(API_BASE, {
       method: "POST",
@@ -86,16 +92,32 @@ export const SeoProjectService = {
     return fetchJson<CrawlConfig>(`${API_BASE}/${encodeURIComponent(projectId)}/config`);
   },
 
-  // Project audits
-  async createProjectAudit(projectId: string, request: any): Promise<{ audit_id: string }> {
-    return fetchJson<{ audit_id: string }>(`${API_BASE}/${encodeURIComponent(projectId)}/audits`, {
+  // Project audits with pagination and filtering
+  async createProjectAudit(projectId: string, request: SeoAuditRequest): Promise<SeoAudit> {
+    return fetchJson<SeoAudit>(`${API_BASE}/${encodeURIComponent(projectId)}/audits`, {
       method: "POST",
       body: JSON.stringify(request),
     });
   },
 
-  async listProjectAudits(projectId: string): Promise<any[]> {
-    return fetchJson<any[]>(`${API_BASE}/${encodeURIComponent(projectId)}/audits`);
+  async listProjectAudits(
+    projectId: string,
+    params: AuditListParams = {}
+  ): Promise<AuditListResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.page) searchParams.set("page", String(params.page));
+    if (params.page_size) searchParams.set("page_size", String(params.page_size));
+    if (params.status) searchParams.set("status", params.status.join(","));
+    if (params.date_from) searchParams.set("date_from", params.date_from);
+    if (params.date_to) searchParams.set("date_to", params.date_to);
+    if (params.min_score !== undefined) searchParams.set("min_score", String(params.min_score));
+    if (params.max_score !== undefined) searchParams.set("max_score", String(params.max_score));
+    if (params.search) searchParams.set("search", params.search);
+    if (params.sort_by) searchParams.set("sort_by", params.sort_by);
+    if (params.sort_order) searchParams.set("sort_order", params.sort_order);
+
+    const url = `${API_BASE}/${encodeURIComponent(projectId)}/audits?${searchParams.toString()}`;
+    return fetchJson<AuditListResponse>(url);
   },
 
   // Capabilities & Provider Status
@@ -116,6 +138,8 @@ export interface CreateProjectRequest {
   max_pages?: number;
   max_depth?: number;
   crawl_config?: Partial<CrawlConfig>;
+  country?: string;
+  language?: string;
 }
 
 // Re-export types for components

@@ -23,8 +23,12 @@ from app.schemas.seo import (
     SeoRecommendation,
     SeoSiteSignals,
     PageType,
+    AuditComparison,
+    AuditProgress,
+    ExportFormat,
 )
 from app.storage.seo_store import SeoAuditStore
+from app.services.seo_project_service import SeoProjectService
 
 USER_AGENT = "VexSeoBot/1.0"
 DEFAULT_MAX_PAGES = 100
@@ -380,9 +384,15 @@ class SeoCrawler:
 class SeoAuditService:
     """Coordinates crawling, analysis, scoring, storage, and exports."""
 
-    def __init__(self, store: SeoAuditStore | None = None, crawler: SeoCrawler | None = None) -> None:
+    def __init__(
+        self,
+        store: SeoAuditStore | None = None,
+        crawler: SeoCrawler | None = None,
+        project_service: SeoProjectService | None = None,
+    ) -> None:
         self.store = store or SeoAuditStore()
         self.crawler = crawler or SeoCrawler()
+        self.project_service = project_service or SeoProjectService()
 
     async def create_audit(
         self,
@@ -392,9 +402,25 @@ class SeoAuditService:
         language: str = "",
         business_description: str = "",
         include_ai_recommendations: bool = False,
+        project_id: str | None = None,
     ) -> SeoAudit:
         capped_max_pages = min(max_pages, HARD_MAX_PAGES)
         normalized = normalize_url(url)
+
+        # Initialize progress
+        progress = {
+            "status": "running",
+            "progress_pct": 0.0,
+            "current_url": "",
+            "current_depth": 0,
+            "urls_queued": 0,
+            "urls_crawled": 0,
+            "urls_failed": 0,
+            "urls_skipped": 0,
+            "elapsed_seconds": 0.0,
+            "pages_per_second": 0.0,
+        }
+
         fetches, crawl_errors, signals = await self.crawler.crawl(normalized, capped_max_pages)
         pages = analyze_fetches(fetches)
         site_signals = build_site_signals(pages, signals)
@@ -412,6 +438,7 @@ class SeoAuditService:
             max_pages=capped_max_pages,
             crawled_pages=len(pages),
             score=score,
+            project_id=project_id,
             issues=issues,
             recommendations=recommendations,
             pages=pages,
@@ -432,8 +459,14 @@ class SeoAuditService:
                     "page_limit_new": HARD_MAX_PAGES,
                 },
             },
+            progress=progress,
         )
         self.store.save_audit(audit.model_dump())
+
+        # Add to project audit history if project_id provided
+        if project_id:
+            self.project_service.add_audit_to_history(project_id, audit.id, score, len(pages))
+
         return audit
 
     def get_audit(self, audit_id: str) -> SeoAudit:
@@ -455,6 +488,210 @@ class SeoAuditService:
         if enabled:
             raise SeoAuditError("AI recommendations are not available in this MVP")
         return []
+
+    def list_audits(self, params: dict[str, Any]) -> dict[str, Any]:
+        """List audits with pagination and filtering."""
+        from app.storage.json_store import load_json
+        from app.storage.seo_store import SEO_AUDITS_PATH
+
+        data = load_json(SEO_AUDITS_PATH, [])
+        if not isinstance(data, list):
+            return {"audits": [], "total": 0, "page": 1, "page_size": 20, "total_pages": 0, "has_next": False, "has_prev": False}
+
+        # Filter by project_id
+        project_id = params.get("project_id")
+        if project_id:
+            data = [a for a in data if a.get("project_id") == project_id]
+
+        # Filter by status
+        status = params.get("status")
+        if status:
+            if isinstance(status, list):
+                data = [a for a in data if a.get("status") in status]
+            else:
+                data = [a for a in data if a.get("status") == status]
+
+        # Filter by date range
+        date_from = params.get("date_from")
+        if date_from:
+            data = [a for a in data if a.get("created_at", "") >= date_from]
+        date_to = params.get("date_to")
+        if date_to:
+            data = [a for a in data if a.get("created_at", "") <= date_to]
+
+        # Filter by score range
+        min_score = params.get("min_score")
+        if min_score is not None:
+            data = [a for a in data if a.get("score", 0) >= min_score]
+        max_score = params.get("max_score")
+        if max_score is not None:
+            data = [a for a in data if a.get("score", 0) <= max_score]
+
+        # Search in requested_url
+        search = params.get("search")
+        if search:
+            search_lower = search.lower()
+            data = [a for a in data if search_lower in a.get("requested_url", "").lower()]
+
+        # Sort
+        sort_by = params.get("sort_by", "created_at")
+        sort_order = params.get("sort_order", "desc")
+        reverse = sort_order == "desc"
+        try:
+            data.sort(key=lambda a: a.get(sort_by, ""), reverse=reverse)
+        except Exception:
+            data.sort(key=lambda a: a.get("created_at", ""), reverse=True)
+
+        total = len(data)
+        page = params.get("page", 1)
+        page_size = params.get("page_size", 20)
+        total_pages = (total + page_size - 1) // page_size
+        start = (page - 1) * page_size
+        end = start + page_size
+        audits = data[start:end]
+
+        return {
+            "audits": audits,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        }
+
+    def get_audit_progress(self, audit_id: str) -> AuditProgress:
+        """Get audit progress for polling."""
+        from datetime import datetime
+        audit = self.get_audit(audit_id)
+        progress = audit.progress or {}
+        return AuditProgress(
+            audit_id=audit_id,
+            status=audit.status,
+            progress_pct=progress.get("progress_pct", 0.0),
+            current_url=progress.get("current_url", ""),
+            current_depth=progress.get("current_depth", 0),
+            urls_queued=progress.get("urls_queued", 0),
+            urls_crawled=progress.get("urls_crawled", 0),
+            urls_failed=progress.get("urls_failed", 0),
+            urls_skipped=progress.get("urls_skipped", 0),
+            elapsed_seconds=progress.get("elapsed_seconds", 0.0),
+            estimated_remaining_seconds=progress.get("estimated_remaining_seconds"),
+            pages_per_second=progress.get("pages_per_second", 0.0),
+            recent_errors=progress.get("recent_errors", []),
+            timestamp=datetime.now().isoformat(),
+        )
+
+    def compare_audits(self, baseline_audit_id: str, comparison_audit_id: str) -> AuditComparison:
+        """Compare two audits and return deltas."""
+        baseline = self.get_audit(baseline_audit_id)
+        comparison = self.get_audit(comparison_audit_id)
+
+        score_change = comparison.score - baseline.score
+        score_change_pct = (score_change / baseline.score * 100) if baseline.score else 0.0
+
+        # Compare issues
+        baseline_issues = {(i.code, i.url): i for i in baseline.issues}
+        comparison_issues = {(i.code, i.url): i for i in comparison.issues}
+
+        baseline_codes = set(baseline_issues.keys())
+        comparison_codes = set(comparison_issues.keys())
+
+        resolved = baseline_codes - comparison_codes
+        new = comparison_codes - baseline_codes
+
+        # Count worsened/improved (same code but different severity)
+        worsened = 0
+        improved = 0
+        for code in baseline_codes & comparison_codes:
+            base_sev = baseline_issues[code].severity
+            comp_sev = comparison_issues[code].severity
+            sev_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+            if sev_order.get(comp_sev, 4) > sev_order.get(base_sev, 4):
+                worsened += 1
+            elif sev_order.get(comp_sev, 4) < sev_order.get(base_sev, 4):
+                improved += 1
+
+        # Compare pages
+        baseline_pages = {p.url: p for p in baseline.pages}
+        comparison_pages = {p.url: p for p in comparison.pages}
+        pages_improved = sum(1 for url in baseline_pages if url in comparison_pages and (comparison_pages[url].page_score or 0) > (baseline_pages[url].page_score or 0))
+        pages_declined = sum(1 for url in baseline_pages if url in comparison_pages and (comparison_pages[url].page_score or 0) < (baseline_pages[url].page_score or 0))
+
+        # Category changes
+        category_changes = {}
+        for cat in ["technical", "content", "on_page", "performance", "mobile", "structured_data", "links", "images", "security", "accessibility"]:
+            baseline_cat = sum(1 for i in baseline.issues if i.category == cat or (hasattr(i, 'category') and i.category == cat))
+            comparison_cat = sum(1 for i in comparison.issues if i.category == cat or (hasattr(i, 'category') and i.category == cat))
+            if baseline_cat != comparison_cat:
+                category_changes[cat] = comparison_cat - baseline_cat
+
+        return AuditComparison(
+            baseline_audit_id=baseline_audit_id,
+            comparison_audit_id=comparison_audit_id,
+            baseline_date=baseline.created_at,
+            comparison_date=comparison.created_at,
+            score_change=score_change,
+            score_change_pct=round(score_change_pct, 2),
+            issues_resolved=len(resolved),
+            issues_new=len(new),
+            issues_worsened=worsened,
+            issues_improved=improved,
+            pages_improved=pages_improved,
+            pages_declined=pages_declined,
+            top_improvements=[f"Resolved {len(resolved)} issues", f"Improved {improved} issues"] if resolved or improved else [],
+            top_regressions=[f"New {len(new)} issues", f"Worsened {worsened} issues"] if new or worsened else [],
+            category_changes=category_changes,
+        )
+
+    def export_csv(self, audit_id: str, export_format: ExportFormat) -> str:
+        """Export audit data as CSV."""
+        audit = self.get_audit(audit_id)
+        import csv
+        import io
+
+        output = io.StringIO()
+
+        if export_format.type in ["issues", "both"]:
+            writer = csv.writer(output)
+            writer.writerow(["Severity", "Code", "Message", "URL", "Recommendation", "Current Value", "Page Type", "Scope"])
+            for issue in audit.issues:
+                writer.writerow([
+                    issue.severity,
+                    issue.code,
+                    issue.message,
+                    issue.url,
+                    issue.recommendation,
+                    issue.current_value,
+                    issue.page_type,
+                    issue.scope,
+                ])
+            if export_format.type == "both":
+                output.write("\n")
+
+        if export_format.type in ["pages", "both"]:
+            writer = csv.writer(output)
+            writer.writerow(["URL", "Status Code", "Page Type", "Page Score", "Title", "Meta Description", "H1 Count", "H2 Count", "Word Count", "Internal Links", "External Links", "Images Total", "Images Missing Alt", "Indexable", "Issues Count"])
+            for page in audit.pages:
+                writer.writerow([
+                    page.url,
+                    page.status_code,
+                    page.page_type,
+                    page.page_score or 0,
+                    page.title,
+                    page.meta_description,
+                    len(page.h1),
+                    len(page.h2),
+                    page.word_count,
+                    len(page.internal_links),
+                    len(page.external_links),
+                    page.images_total,
+                    page.images_missing_alt,
+                    "Yes" if page.indexable else "No",
+                    len(page.issues),
+                ])
+
+        return output.getvalue()
 
 
 def normalize_url(url: str) -> str:

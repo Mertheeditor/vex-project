@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { SeoExpertPage } from "./components/SeoExpertPage";
+import { SiteAuditPage } from "./components/seo/SiteAuditPage";
 import "./App.css";
 
 type Message = {
@@ -125,7 +126,7 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo" | "site-audit";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -705,6 +706,7 @@ function App() {
     if (activeView === "evolution") return "Evrim Merkezi";
     if (activeView === "computer") return "Bilgisayar Kontrol";
     if (activeView === "seo") return "SEO Uzmanı";
+    if (activeView === "site-audit") return "Site Audit";
     return "Vex";
   }
 
@@ -3199,6 +3201,12 @@ Durum: ${outputResult.output.status}
           >
             SEO Uzmanı
           </button>
+          <button
+            className={`nav-item ${activeView === "site-audit" ? "active" : ""}`}
+            onClick={() => setActiveView("site-audit")}
+          >
+            Site Audit
+          </button>
           <button className="nav-item">Tasarım</button>
           <button className="nav-item">Dosyalar</button>
 
@@ -3672,6 +3680,8 @@ Durum: ${outputResult.output.status}
         ) : null}
 
         {activeView === "seo" ? <SeoExpertPage /> : null}
+
+        {activeView === "site-audit" ? <SiteAuditPage /> : null}
 
         {activeView === "memory" ? (
           <>

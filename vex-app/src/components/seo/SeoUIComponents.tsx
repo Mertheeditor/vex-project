@@ -16,7 +16,7 @@ export function IssueBadge({
   label,
   size = "md",
   className = "",
-}: IssueBadgeProps) {
+}: IssueBadgeProps): React.ReactNode {
   const displayLabel = label || severity;
   const severityClass = `issue-badge-${severity.toLowerCase()}`;
   const sizeClass = `issue-badge-${size}`;
@@ -50,7 +50,7 @@ const getScoreLabel = (score: number) => {
   return "Zayıf";
 };
 
-export function ScoreDisplay({ score, size = "md", showLabel = true, className = "" }: ScoreDisplayProps) {
+export function ScoreDisplay({ score, size = "md", showLabel = true, className = "" }: ScoreDisplayProps): React.ReactNode {
   const scoreClass = getScoreColor(score);
 
   return (
@@ -132,7 +132,7 @@ const pageTypeLabels: Record<string, string> = {
   "500": "500 Hatası",
 };
 
-export function PageTypeBadge({ pageType, size = "md", className = "" }: PageTypeBadgeProps) {
+export function PageTypeBadge({ pageType, size = "md", className = "" }: PageTypeBadgeProps): React.ReactNode {
   const label = pageTypeLabels[pageType] || pageType;
   return (
     <span className={`page-type-badge page-type-${size} ${className}`}>
@@ -201,7 +201,7 @@ const categoryLabels: Record<string, string> = {
   images: "Görseller",
 };
 
-export function CategoryBadge({ category, className = "" }: CategoryBadgeProps) {
+export function CategoryBadge({ category, className = "" }: CategoryBadgeProps): React.ReactNode {
   const label = categoryLabels[category] || category;
   return (
     <span className={`category-badge category-${category} ${className}`}>
@@ -311,3 +311,284 @@ export function SeoSummaryCard({ title, value, subtitle, trend, icon, className 
 // Export all components
 export * from "./SeoProjectSelector";
 export * from "./ProviderStatusField";
+
+// Data Table types
+export interface Column<T> {
+  key: string;
+  header: string;
+  render?: (row: T) => React.ReactNode;
+  width?: string;
+  sortable?: boolean;
+}
+
+// Progress Bar Component
+interface ProgressBarProps {
+  progress: number;
+  label?: string;
+  showPercentage?: boolean;
+  variant?: "default" | "success" | "warning" | "error";
+  className?: string;
+}
+
+export function ProgressBar({
+  progress,
+  label,
+  showPercentage = true,
+  variant = "default",
+  className = "",
+}: ProgressBarProps) {
+  const clampedProgress = Math.max(0, Math.min(100, progress));
+  const variantClass = `progress-bar-${variant}`;
+
+  return (
+    <div className={`progress-bar ${variantClass} ${className}`}>
+      {label && <div className="progress-bar-label">{label}</div>}
+      <div className="progress-bar-track">
+        <div
+          className="progress-bar-fill"
+          style={{ width: `${clampedProgress}%` }}
+          role="progressbar"
+          aria-valuenow={clampedProgress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
+      </div>
+      {showPercentage && <span className="progress-bar-percentage">{Math.round(clampedProgress)}%</span>}
+    </div>
+  );
+}
+
+// Data Table Component
+
+interface DataTableProps<T> {
+  data: T[];
+  columns: Column<T>[];
+  keyExtractor: (row: T) => string;
+  onRowClick?: (row: T) => void;
+  emptyMessage?: string;
+  className?: string;
+  sortColumn?: string;
+  sortDirection?: "asc" | "desc";
+  onSort?: (column: string) => void;
+}
+
+export function DataTable<T>({
+  data,
+  columns,
+  keyExtractor,
+  onRowClick,
+  emptyMessage = "Veri bulunamadı",
+  className = "",
+  sortColumn,
+  sortDirection,
+  onSort,
+}: DataTableProps<T>) {
+  const handleSort = (columnKey: string) => {
+    if (onSort) {
+      onSort(columnKey);
+    }
+  };
+
+  if (data.length === 0) {
+    return (
+      <div className={`data-table-empty ${className}`}>
+        <p>{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`data-table-container ${className}`}>
+      <table className="data-table">
+        <thead>
+          <tr>
+            {columns.map((col) => (
+              <th
+                key={col.key}
+                style={col.width ? { width: col.width } : undefined}
+                className={col.sortable ? "sortable" : ""}
+                onClick={() => col.sortable && handleSort(col.key)}
+              >
+                {col.header}
+                {col.sortable && sortColumn === col.key && (
+                  <span className="sort-icon">{sortDirection === "asc" ? " ▲" : " ▼"}</span>
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr
+              key={keyExtractor(row)}
+              onClick={() => onRowClick?.(row)}
+              className={onRowClick ? "clickable" : ""}
+            >
+              {columns.map((col) => (
+                <td key={col.key}>
+                  {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Filter Bar Component
+interface FilterOption {
+  value: string;
+  label: string;
+  count?: number;
+}
+
+interface FilterBarProps {
+  filters: {
+    severity?: FilterOption[];
+    category?: FilterOption[];
+    pageType?: FilterOption[];
+    status?: FilterOption[];
+  };
+  selected: {
+    severity?: string | string[];
+    category?: string | string[];
+    pageType?: string | string[];
+    status?: string | string[];
+  };
+  onChange: (filterType: string, value: string | string[]) => void;
+  onClearAll: () => void;
+  hasActiveFilters: boolean;
+}
+
+export function FilterBar({
+  filters,
+  selected,
+  onChange,
+  onClearAll,
+  hasActiveFilters,
+}: FilterBarProps) {
+  const renderFilterGroup = (type: keyof typeof filters, title: string) => {
+    const options = filters[type];
+    const selectedValues = Array.isArray(selected[type]) ? selected[type] : selected[type] ? [selected[type]] : [];
+
+    if (!options || options.length === 0) return null;
+
+    return (
+      <div className="filter-group">
+        <label className="filter-label">{title}</label>
+        <div className="filter-chips">
+          {options.map((opt) => (
+            <button
+              key={opt.value}
+              className={`filter-chip ${selectedValues.includes(opt.value) ? "active" : ""}`}
+              onClick={() => onChange(type, opt.value)}
+            >
+              {opt.label}
+              {opt.count !== undefined && <span className="filter-count">({opt.count})</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className={`filter-bar ${hasActiveFilters ? "has-filters" : ""}`}>
+      <div className="filter-groups">
+        {renderFilterGroup("severity", "Önem Derecesi")}
+        {renderFilterGroup("category", "Kategori")}
+        {renderFilterGroup("pageType", "Sayfa Tipi")}
+        {renderFilterGroup("status", "Durum")}
+      </div>
+      {hasActiveFilters && (
+        <button className="filter-clear-all" onClick={onClearAll}>
+          Tüm Filtreleri Temizle
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Pagination Component
+interface PaginationProps {
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+  pageSizeOptions?: number[];
+}
+
+export function Pagination({
+  currentPage,
+  totalPages,
+  pageSize,
+  totalItems,
+  onPageChange,
+  onPageSizeChange,
+  pageSizeOptions = [10, 20, 50, 100],
+}: PaginationProps) {
+  const startItem = (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalItems);
+
+  return (
+    <div className="pagination">
+      <div className="pagination-info">
+        <span>
+          {startItem}–{endItem} / {totalItems} kayıt
+        </span>
+        <select
+          value={pageSize}
+          onChange={(e) => onPageSizeChange(Number(e.target.value))}
+          className="pagination-page-size"
+        >
+          {pageSizeOptions.map((size) => (
+            <option key={size} value={size}>
+              {size} / sayfa
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="pagination-controls">
+        <button
+          className="pagination-btn"
+          onClick={() => onPageChange(1)}
+          disabled={currentPage === 1}
+          aria-label="İlk sayfa"
+        >
+          ⏮
+        </button>
+        <button
+          className="pagination-btn"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          aria-label="Önceki sayfa"
+        >
+          ◀
+        </button>
+        <span className="pagination-page" aria-current="true">
+          Sayfa {currentPage} / {totalPages}
+        </span>
+        <button
+          className="pagination-btn"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          aria-label="Sonraki sayfa"
+        >
+          ▶
+        </button>
+        <button
+          className="pagination-btn"
+          onClick={() => onPageChange(totalPages)}
+          disabled={currentPage === totalPages}
+          aria-label="Son sayfa"
+        >
+          ⏭
+        </button>
+      </div>
+    </div>
+  );
+}
