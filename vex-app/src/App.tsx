@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SeoExpertPage } from "./components/SeoExpertPage";
 import { SiteAuditPage } from "./components/seo/SiteAuditPage";
+import { DomainOverviewPage } from "./components/seo/DomainOverviewPage";
 import { ProviderSettingsPanel } from "./components/settings/ProviderSettingsPanel";
 import "./App.css";
 
@@ -127,7 +128,7 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo" | "site-audit" | "settings";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo" | "site-audit" | "settings" | "domain-overview";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -3213,6 +3214,12 @@ Durum: ${outputResult.output.status}
           >
             Site Audit
           </button>
+          <button
+            className={`nav-item ${activeView === "domain-overview" ? "active" : ""}`}
+            onClick={() => setActiveView("domain-overview")}
+          >
+            Domain Overview
+          </button>
           <button className="nav-item">Tasarım</button>
           <button className="nav-item">Dosyalar</button>
 
@@ -3695,6 +3702,8 @@ Durum: ${outputResult.output.status}
         {activeView === "seo" ? <SeoExpertPage /> : null}
 
         {activeView === "site-audit" ? <SiteAuditPage /> : null}
+
+        {activeView === "domain-overview" ? <DomainOverviewPage /> : null}
 
         {activeView === "memory" ? (
           <>
