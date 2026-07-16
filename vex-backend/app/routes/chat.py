@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.core.config import CHAT_HISTORY_LIMIT
+from app.schemas.ai_provider import ProviderRequest
 from app.schemas.common import ChatRequest
-from app.services.gemini_service import generate_text
+from app.services.ai_provider import TaskType
+from app.services.ai_provider_router import initialize_router
 from app.storage.memory_store import load_memory
 
 router = APIRouter()
@@ -37,7 +39,7 @@ def _build_history_block(history: list, user_name: str) -> str:
 
 
 @router.post("/chat")
-def chat(request: ChatRequest):
+async def chat(request: ChatRequest):
     memory = load_memory()
     user_name = _display_name(memory)
     assistant = memory.get("assistant") or {}
@@ -56,12 +58,20 @@ def chat(request: ChatRequest):
         f"Vex:"
     )
 
-    result = generate_text(prompt)
-    if result.get("success"):
-        reply = (result.get("text") or "").strip() or f"Tamam {user_name}."
-        return {"success": True, "reply": reply}
-    return {
-        "success": False,
-        "reply": f"⚠️ Şu an Gemini'ye ulaşamıyorum {user_name}. Teknik detay: {result.get('message')}",
-        "error": result.get("message"),
-    }
+    router = await initialize_router()
+    provider_request = ProviderRequest(
+        messages=[{"role": "user", "content": prompt}],
+        task_type=TaskType.CHAT,
+        temperature=0.7,
+    )
+    response = await router.complete(provider_request)
+
+    if response.error:
+        return {
+            "success": False,
+            "reply": f"⚠️ Şu an AI sağlayıcısına ulaşamıyorum {user_name}. Teknik detay: {response.error}",
+            "error": response.error,
+        }
+
+    reply = (response.content or "").strip() or f"Tamam {user_name}."
+    return {"success": True, "reply": reply, "provider": response.provider, "model": response.model}

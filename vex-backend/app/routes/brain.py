@@ -16,13 +16,13 @@ class SelfReadRequest(BaseModel):
 
 
 @router.post("/brain/ask")
-def brain_ask(request: ChatRequest):
+async def brain_ask(request: ChatRequest):
     """JARVIS tarzı tek giriş: doğal dil -> çok adımlı akıl yürütme."""
-    return ask(request.message, request.history)
+    return await ask(request.message, request.history)
 
 
 @router.get("/brain/status")
-def brain_status():
+async def brain_status():
     """Vex kendi halini doğal dille özetler."""
     return system_status()
 

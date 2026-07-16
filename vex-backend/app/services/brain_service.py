@@ -20,13 +20,41 @@ import threading
 
 from app.core.config import CHAT_HISTORY_LIMIT
 from app.core.paths import REMINDERS_PATH, TASKS_PATH
-from app.services.gemini_service import generate_text, strip_code_fences
+from app.schemas.ai_provider import ProviderRequest
+from app.services.ai_provider import TaskType
+from app.services.ai_provider_router import initialize_router
 from app.services.text_utils import parse_reminder_time_detailed
 from app.storage.entity_store import list_items, upsert_item
 from app.storage.memory_store import add_rule_from_message, load_memory
 
 MAX_MESSAGE_CHARS = 2000
 MAX_BRAIN_STEPS = 5  # bir mesaj için azami araç-zinciri uzunluğu
+
+
+async def _generate_text(prompt: str, model: str | None = None) -> dict:
+    """Wrapper to use provider router for text generation."""
+    router = await initialize_router()
+    request = ProviderRequest(
+        messages=[{"role": "user", "content": prompt}],
+        task_type=TaskType.CHAT,
+        temperature=0.7,
+    )
+    response = await router.complete(request)
+    if response.error:
+        return {"success": False, "message": response.error}
+    return {"success": True, "text": response.content or ""}
+
+
+def strip_code_fences(text: str) -> str:
+    value = (text or "").strip()
+    if value.startswith("```"):
+        lines = value.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        value = "\n".join(lines).strip()
+    return value
 
 
 # ===========================================================================
@@ -193,7 +221,7 @@ def _step_prompt(message, history_block, user_name, rules, scratchpad):
     )
 
 
-def _extract_and_learn(message, reply, user_name):
+async def _extract_and_learn(message, reply, user_name):
     # Öğrenen hafıza (fire-and-forget): konuşmadan kalıcı bir olgu çıkar, kaydet.
     try:
         prompt = (
@@ -203,7 +231,7 @@ def _extract_and_learn(message, reply, user_name):
             f"Geçici/önemsiz şeyler için boş bırak.\n\n"
             f"{user_name}: {message}\nVex: {reply}\nJSON:"
         )
-        res = generate_text(prompt)
+        res = await _generate_text(prompt)
         if not res.get("success"):
             return
         data = json.loads(strip_code_fences(res.get("text") or "{}"))
@@ -221,7 +249,7 @@ def _extract_and_learn(message, reply, user_name):
 # ANA GİRİŞ — çok adımlı döngü
 # ===========================================================================
 
-def ask(message, history=None):
+async def ask(message, history=None):
     message = (message or "").strip()
     if not message:
         return {"success": False, "reply": "Bir şey yazmadın gibi görünüyor."}
@@ -239,7 +267,7 @@ def ask(message, history=None):
 
     for step in range(1, MAX_BRAIN_STEPS + 1):
         steps_taken = step
-        routed = generate_text(_step_prompt(message, hist_block, user_name, rules, scratchpad))
+        routed = await _generate_text(_step_prompt(message, hist_block, user_name, rules, scratchpad))
         if not routed.get("success"):
             return {"success": False, "reply": f"⚠️ Şu an beynim çevrimdışı {user_name}. Teknik: {routed.get('message')}",
                     "error": routed.get("message")}
@@ -285,7 +313,7 @@ def ask(message, history=None):
         final_reply = f"Tamam {user_name}."
 
     # Öğrenen hafıza — yanıtı bloklamadan arka planda çalışır.
-    threading.Thread(target=_extract_and_learn, args=(message, final_reply, user_name), daemon=True).start()
+    threading.Thread(target=lambda: __import__("asyncio").run(_extract_and_learn(message, final_reply, user_name)), daemon=True).start()
 
     return {"success": True, "reply": final_reply, "tools_used": tools_used, "steps": steps_taken}
 

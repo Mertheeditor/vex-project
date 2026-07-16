@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.services import scheduler_service
 
 from app.routes import (
+    ai_provider,
     approvals,
     brain,
     chat,
@@ -65,4 +66,5 @@ app.include_router(site.router)
 app.include_router(seo.router)
 app.include_router(seo_projects.router)
 app.include_router(shopify.router)
+app.include_router(ai_provider.router)
 app.include_router(evolution.router)

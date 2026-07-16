@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SeoExpertPage } from "./components/SeoExpertPage";
 import { SiteAuditPage } from "./components/seo/SiteAuditPage";
+import { ProviderSettingsPanel } from "./components/settings/ProviderSettingsPanel";
 import "./App.css";
 
 type Message = {
@@ -126,7 +127,7 @@ type OutputFromChatResult = {
   outputs?: OutputData[];
 };
 
-type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo" | "site-audit";
+type ActiveView = "dashboard" | "chat" | "memory" | "projects" | "tasks" | "approvals" | "outputs" | "reminders" | "evolution" | "computer" | "seo" | "site-audit" | "settings";
 type BackendStatus = "checking" | "online" | "offline";
 
 type WorkspaceSummary = {
@@ -707,6 +708,7 @@ function App() {
     if (activeView === "computer") return "Bilgisayar Kontrol";
     if (activeView === "seo") return "SEO Uzmanı";
     if (activeView === "site-audit") return "Site Audit";
+    if (activeView === "settings") return "Ayarlar";
     return "Vex";
   }
 
@@ -2559,6 +2561,10 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     loadReminders();
   }
 
+  function openSettingsView() {
+    setActiveView("settings");
+  }
+
   async function sendMessage(messageOverride?: string) {
     const cleanInput = (messageOverride ?? input).trim();
 
@@ -3243,6 +3249,13 @@ Durum: ${outputResult.output.status}
             onClick={() => setActiveView("evolution")}
           >
             Kendi Kendine Gelişim (Evrim)
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "settings" ? "active" : ""}`}
+            onClick={openSettingsView}
+          >
+            Ayarlar
           </button>
 
           <button
@@ -4784,6 +4797,21 @@ Durum: ${outputResult.output.status}
                   )}
                 </div>
               </div>
+            </div>
+          </>
+        ) : null}
+
+        {activeView === "settings" ? (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">AI Sağlayıcı Yapılandırması</p>
+                <h2>Sağlayıcı Ayarları</h2>
+              </div>
+            </header>
+
+            <div className="settings-page">
+              <ProviderSettingsPanel />
             </div>
           </>
         ) : null}
