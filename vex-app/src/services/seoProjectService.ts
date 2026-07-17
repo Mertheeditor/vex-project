@@ -12,24 +12,22 @@ import type {
   AuditListResponse,
   SeoAudit,
 } from "../types/seo";
+import { ApiError, apiRequest, type ApiRequestOptions, type QueryParams } from "./apiClient";
 
-const API_BASE = "http://127.0.0.1:8000/seo/projects";
+const API_PATH = "/seo/projects";
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-    ...options,
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+async function requestJson<T>(path: string, options?: ApiRequestOptions): Promise<T> {
+  try {
+    return await apiRequest<T>(path, options);
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      if (isRecord(error.body) && typeof error.body.detail === "string" && error.body.detail) {
+        throw new Error(error.body.detail);
+      }
+      throw new Error(typeof error.body === "string" ? "Unknown error" : `HTTP ${error.status}`);
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 export const SeoProjectService = {
@@ -44,19 +42,19 @@ export const SeoProjectService = {
     country?: string;
     language?: string;
   }): Promise<SeoProject> {
-    return fetchJson<SeoProject>(API_BASE, {
+    return requestJson<SeoProject>(API_PATH, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: data,
     });
   },
 
   async listProjects(): Promise<SeoProject[]> {
-    return fetchJson<SeoProject[]>(API_BASE);
+    return requestJson<SeoProject[]>(API_PATH);
   },
 
   async getProject(projectId: string): Promise<SeoProject | null> {
     try {
-      return await fetchJson<SeoProject>(`${API_BASE}/${encodeURIComponent(projectId)}`);
+      return await requestJson<SeoProject>(`${API_PATH}/${encodeURIComponent(projectId)}`);
     } catch (e) {
       return null;
     }
@@ -67,9 +65,9 @@ export const SeoProjectService = {
     updates: Partial<SeoProject>
   ): Promise<SeoProject | null> {
     try {
-      return await fetchJson<SeoProject>(`${API_BASE}/${encodeURIComponent(projectId)}`, {
+      return await requestJson<SeoProject>(`${API_PATH}/${encodeURIComponent(projectId)}`, {
         method: "PATCH",
-        body: JSON.stringify(updates),
+        body: updates,
       });
     } catch (e) {
       return null;
@@ -78,25 +76,28 @@ export const SeoProjectService = {
 
   async deleteProject(projectId: string): Promise<boolean> {
     try {
-      await fetch(`${API_BASE}/${encodeURIComponent(projectId)}`, {
+      await apiRequest<void>(`${API_PATH}/${encodeURIComponent(projectId)}`, {
         method: "DELETE",
       });
       return true;
-    } catch (e) {
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.status !== null) {
+        return true;
+      }
       return false;
     }
   },
 
   // Project crawl config
   async getProjectCrawlConfig(projectId: string): Promise<CrawlConfig> {
-    return fetchJson<CrawlConfig>(`${API_BASE}/${encodeURIComponent(projectId)}/config`);
+    return requestJson<CrawlConfig>(`${API_PATH}/${encodeURIComponent(projectId)}/config`);
   },
 
   // Project audits with pagination and filtering
   async createProjectAudit(projectId: string, request: SeoAuditRequest): Promise<SeoAudit> {
-    return fetchJson<SeoAudit>(`${API_BASE}/${encodeURIComponent(projectId)}/audits`, {
+    return requestJson<SeoAudit>(`${API_PATH}/${encodeURIComponent(projectId)}/audits`, {
       method: "POST",
-      body: JSON.stringify(request),
+      body: request,
     });
   },
 
@@ -104,29 +105,31 @@ export const SeoProjectService = {
     projectId: string,
     params: AuditListParams = {}
   ): Promise<AuditListResponse> {
-    const searchParams = new URLSearchParams();
-    if (params.page) searchParams.set("page", String(params.page));
-    if (params.page_size) searchParams.set("page_size", String(params.page_size));
-    if (params.status) searchParams.set("status", params.status.join(","));
-    if (params.date_from) searchParams.set("date_from", params.date_from);
-    if (params.date_to) searchParams.set("date_to", params.date_to);
-    if (params.min_score !== undefined) searchParams.set("min_score", String(params.min_score));
-    if (params.max_score !== undefined) searchParams.set("max_score", String(params.max_score));
-    if (params.search) searchParams.set("search", params.search);
-    if (params.sort_by) searchParams.set("sort_by", params.sort_by);
-    if (params.sort_order) searchParams.set("sort_order", params.sort_order);
+    const query: QueryParams = {
+      page: params.page || undefined,
+      page_size: params.page_size || undefined,
+      status: params.status?.join(","),
+      date_from: params.date_from || undefined,
+      date_to: params.date_to || undefined,
+      min_score: params.min_score,
+      max_score: params.max_score,
+      search: params.search || undefined,
+      sort_by: params.sort_by,
+      sort_order: params.sort_order,
+    };
 
-    const url = `${API_BASE}/${encodeURIComponent(projectId)}/audits?${searchParams.toString()}`;
-    return fetchJson<AuditListResponse>(url);
+    return requestJson<AuditListResponse>(`${API_PATH}/${encodeURIComponent(projectId)}/audits`, {
+      query,
+    });
   },
 
   // Capabilities & Provider Status
   async getCapabilities(): Promise<SeoCapabilities> {
-    return fetchJson<SeoCapabilities>(`${API_BASE}/capabilities`);
+    return requestJson<SeoCapabilities>(`${API_PATH}/capabilities`);
   },
 
   async getProviderStatus(): Promise<ProviderStatus> {
-    return fetchJson<ProviderStatus>(`${API_BASE}/providers/status`);
+    return requestJson<ProviderStatus>(`${API_PATH}/providers/status`);
   },
 };
 
@@ -144,3 +147,7 @@ export interface CreateProjectRequest {
 
 // Re-export types for components
 export type { SeoProject, SeoCapabilities, ProviderStatus, ProviderInfo, CrawlConfig };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

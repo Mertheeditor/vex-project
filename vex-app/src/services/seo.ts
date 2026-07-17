@@ -14,6 +14,13 @@ import type {
   ProviderStatus,
   SeoIssue,
 } from "../types/seo";
+import {
+  ApiError,
+  apiRequest,
+  buildApiUrl,
+  type ApiRequestOptions,
+  type QueryParams,
+} from "./apiClient";
 
 // Re-export types for consumers
 export type {
@@ -33,51 +40,15 @@ export type {
   SeoIssue,
 };
 
-const SEO_API_BASE = "http://127.0.0.1:8000/seo/audits";
+const SEO_API_PATH = "/seo/audits";
 
-async function readErrorMessage(response: Response) {
-  const text = await response.text().catch(() => "");
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (isErrorObject(parsed)) {
-      return parsed.detail ?? parsed.message ?? `HTTP ${response.status}`;
-    }
-  } catch {
-    return text;
-  }
-
-  return text;
-}
-
-function isErrorObject(value: unknown): value is { detail?: string; message?: string } {
-  return typeof value === "object" && value !== null;
+export interface StartedSeoAudit {
+  auditId: string | null;
+  resultUrl: string;
 }
 
 export async function createSeoAudit(request: SeoAuditRequest): Promise<SeoAuditResult> {
-  const response = await fetch(SEO_API_BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      url: request.url,
-      country: request.country,
-      language: request.language,
-      business_description: request.business_description,
-      max_pages: request.max_pages,
-      project_id: request.project_id,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-
-  const data: unknown = await response.json();
+  const data = await requestSeoAudit(request);
   const audit = unwrapBackendAudit(data);
   if (!audit) {
     throw new Error("SEO audit cevabı beklenen formatta değil.");
@@ -86,14 +57,33 @@ export async function createSeoAudit(request: SeoAuditRequest): Promise<SeoAudit
   return normalizeBackendAudit(audit);
 }
 
+export async function startSeoAudit(request: SeoAuditRequest): Promise<StartedSeoAudit> {
+  const data = await requestSeoAudit(request);
+  const audit = unwrapBackendAudit(data);
+  return {
+    auditId: audit ? stringValue(audit.id) || null : null,
+    resultUrl: buildApiUrl(SEO_API_PATH),
+  };
+}
+
+async function requestSeoAudit(request: SeoAuditRequest): Promise<unknown> {
+  return apiRequest<unknown>(SEO_API_PATH, {
+    method: "POST",
+    body: {
+      url: request.url,
+      country: request.country,
+      language: request.language,
+      business_description: request.business_description,
+      max_pages: request.max_pages,
+      project_id: request.project_id,
+    },
+  });
+}
+
 export async function downloadSeoAuditExport(auditId: string, format: "markdown" | "json") {
-  const response = await fetch(`${SEO_API_BASE}/${encodeURIComponent(auditId)}/export/${format}`);
-
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-
-  const blob = await response.blob();
+  const blob = await apiRequest<Blob>(`${SEO_API_PATH}/${encodeURIComponent(auditId)}/export/${format}`, {
+    responseType: "blob",
+  });
   const extension = format === "markdown" ? "md" : "json";
   const href = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -270,36 +260,33 @@ function booleanValue(value: unknown) {
 
 // List audits with pagination and filtering
 export async function fetchAuditHistory(params: AuditListParams = {}): Promise<AuditListResponse> {
-  const searchParams = new URLSearchParams();
-  if (params.page) searchParams.set("page", String(params.page));
-  if (params.page_size) searchParams.set("page_size", String(params.page_size));
-  if (params.status) searchParams.set("status", params.status.join(","));
-  if (params.project_id) searchParams.set("project_id", params.project_id);
-  if (params.date_from) searchParams.set("date_from", params.date_from);
-  if (params.date_to) searchParams.set("date_to", params.date_to);
-  if (params.min_score !== undefined) searchParams.set("min_score", String(params.min_score));
-  if (params.max_score !== undefined) searchParams.set("max_score", String(params.max_score));
-  if (params.search) searchParams.set("search", params.search);
-  if (params.sort_by) searchParams.set("sort_by", params.sort_by);
-  if (params.sort_order) searchParams.set("sort_order", params.sort_order);
+  const query: QueryParams = {
+    page: params.page || undefined,
+    page_size: params.page_size || undefined,
+    status: params.status?.join(","),
+    project_id: params.project_id || undefined,
+    date_from: params.date_from || undefined,
+    date_to: params.date_to || undefined,
+    min_score: params.min_score,
+    max_score: params.max_score,
+    search: params.search || undefined,
+    sort_by: params.sort_by,
+    sort_order: params.sort_order,
+  };
 
-  const response = await fetch(`${SEO_API_BASE}?${searchParams.toString()}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  return requestWithHttpStatus<AuditListResponse>(SEO_API_PATH, { query });
 }
 
 // Compare two audits
 export async function compareAudits(currentAuditId: string, baselineAuditId: string): Promise<AuditComparison> {
-  const response = await fetch(`${SEO_API_BASE}/${currentAuditId}/compare?baseline_id=${baselineAuditId}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  return requestWithHttpStatus<AuditComparison>(`${SEO_API_PATH}/${currentAuditId}/compare`, {
+    query: { baseline_id: baselineAuditId },
+  });
 }
 
 // Get audit progress for polling
 export async function fetchAuditProgress(auditId: string): Promise<AuditProgress> {
-  const response = await fetch(`${SEO_API_BASE}/${auditId}/progress`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  return requestWithHttpStatus<AuditProgress>(`${SEO_API_PATH}/${auditId}/progress`);
 }
 
 // Export audit as CSV
@@ -307,17 +294,18 @@ export async function exportAuditCsv(
   auditId: string,
   type: "issues" | "pages" | "both" = "issues"
 ): Promise<string> {
-  const response = await fetch(`${SEO_API_BASE}/${auditId}/export/csv?type=${type}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
+  return requestWithHttpStatus<string>(`${SEO_API_PATH}/${auditId}/export/csv`, {
+    query: { type },
+    responseType: "text",
+  });
 }
 
 // Download audit CSV export
 export async function downloadAuditCsv(auditId: string, type: "issues" | "pages" | "both" = "issues"): Promise<void> {
-  const response = await fetch(`${SEO_API_BASE}/${auditId}/export/csv?type=${type}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const blob = await response.blob();
+  const blob = await requestWithHttpStatus<Blob>(`${SEO_API_PATH}/${auditId}/export/csv`, {
+    query: { type },
+    responseType: "blob",
+  });
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -326,6 +314,20 @@ export async function downloadAuditCsv(auditId: string, type: "issues" | "pages"
   a.click();
   window.URL.revokeObjectURL(url);
   document.body.removeChild(a);
+}
+
+async function requestWithHttpStatus<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  try {
+    return await apiRequest<T>(path, options);
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      throw new Error(`HTTP ${error.status}`);
+    }
+    throw error;
+  }
 }
 
 // Poll audit progress until completion

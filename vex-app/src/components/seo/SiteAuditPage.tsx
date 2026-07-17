@@ -5,6 +5,7 @@ import {
   compareAudits,
   downloadAuditCsv,
   pollAuditProgress,
+  startSeoAudit,
   type SeoAuditResult,
   type SeoAuditIssue,
   type SeoAuditPage,
@@ -338,21 +339,11 @@ export function SiteAuditPage({ initialProjectId }: SiteAuditPageProps) {
     setAuditProgress(null);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/seo/audits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...auditForm,
-          project_id: selectedProjectId,
-        }),
+      const response = await startSeoAudit({
+        ...auditForm,
+        project_id: selectedProjectId,
       });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      const data = await response.json();
-      const auditId = data.audit?.id || data.id;
+      const auditId = response.auditId;
 
       if (auditId) {
         // Start polling
@@ -364,7 +355,7 @@ export function SiteAuditPage({ initialProjectId }: SiteAuditPageProps) {
         );
 
         if (result.status === "completed") {
-          const auditResult = await fetch(`${response.url.replace("/progress", "")}`).then((r) => r.json());
+          const auditResult = await fetch(response.resultUrl).then((r) => r.json());
           const normalized = normalizeBackendAudit(auditResult);
           setCurrentAudit(normalized);
           setAuditStatus("completed");

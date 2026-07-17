@@ -17,24 +17,22 @@ import type {
   CompetitorFilters,
   PositionChangesFilters,
 } from "../types/seoDomain";
+import { ApiError, apiRequest, type ApiRequestOptions } from "./apiClient";
 
-const API_BASE = "http://127.0.0.1:8000/seo/projects";
+const API_PATH = "/seo/projects";
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-    ...options,
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+async function requestJson<T>(path: string, options?: ApiRequestOptions): Promise<T> {
+  try {
+    return await apiRequest<T>(path, options);
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      if (isRecord(error.body) && typeof error.body.detail === "string" && error.body.detail) {
+        throw new Error(error.body.detail);
+      }
+      throw new Error(typeof error.body === "string" ? "Unknown error" : `HTTP ${error.status}`);
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 export const SeoDomainService = {
@@ -56,7 +54,7 @@ export const SeoDomainService = {
       history_days: String(options.history_days ?? 30),
       use_cache: String(options.use_cache ?? true),
     });
-    return fetchJson<DomainOverviewResponse>(`${API_BASE}/${projectId}/domain-overview?${params}`);
+    return requestJson<DomainOverviewResponse>(`${API_PATH}/${projectId}/domain-overview?${params}`);
   },
 
   // Organic Keywords - project-scoped
@@ -97,7 +95,7 @@ export const SeoDomainService = {
     params.set("sort_order", options.sort_order ?? "desc");
     params.set("use_cache", String(options.use_cache ?? true));
 
-    return fetchJson<OrganicKeywordsResponse>(`${API_BASE}/${projectId}/organic-keywords?${params}`);
+    return requestJson<OrganicKeywordsResponse>(`${API_PATH}/${projectId}/organic-keywords?${params}`);
   },
 
   // Organic Pages - project-scoped
@@ -134,7 +132,7 @@ export const SeoDomainService = {
     params.set("sort_order", options.sort_order ?? "desc");
     params.set("use_cache", String(options.use_cache ?? true));
 
-    return fetchJson<OrganicPagesResponse>(`${API_BASE}/${projectId}/organic-pages?${params}`);
+    return requestJson<OrganicPagesResponse>(`${API_PATH}/${projectId}/organic-pages?${params}`);
   },
 
   // Competitors - project-scoped
@@ -167,7 +165,7 @@ export const SeoDomainService = {
     params.set("sort_order", options.sort_order ?? "desc");
     params.set("use_cache", String(options.use_cache ?? true));
 
-    return fetchJson<CompetitorsResponse>(`${API_BASE}/${projectId}/organic-competitors?${params}`);
+    return requestJson<CompetitorsResponse>(`${API_PATH}/${projectId}/organic-competitors?${params}`);
   },
 
   // Position Changes - project-scoped
@@ -204,19 +202,19 @@ export const SeoDomainService = {
     params.set("sort_order", options.sort_order ?? "desc");
     params.set("use_cache", String(options.use_cache ?? true));
 
-    return fetchJson<PositionChangesResponse>(`${API_BASE}/${projectId}/position-changes?${params}`);
+    return requestJson<PositionChangesResponse>(`${API_PATH}/${projectId}/position-changes?${params}`);
   },
 
   // Data Sources - project-scoped
   async getDataSources(projectId: string): Promise<DataSourcesResponse> {
-    return fetchJson<DataSourcesResponse>(`${API_BASE}/${projectId}/data-sources`);
+    return requestJson<DataSourcesResponse>(`${API_PATH}/${projectId}/data-sources`);
   },
 
   // Bulk Operations - not project-scoped
   async bulkDomainOverview(request: BulkDomainOverviewRequest): Promise<BulkDomainOverviewResponse> {
-    return fetchJson<BulkDomainOverviewResponse>(`${API_BASE}/bulk-overview`, {
+    return requestJson<BulkDomainOverviewResponse>(`${API_PATH}/bulk-overview`, {
       method: "POST",
-      body: JSON.stringify(request),
+      body: request,
     });
   },
 
@@ -225,15 +223,15 @@ export const SeoDomainService = {
     projectId: string,
     request: ExportDomainOverviewRequest
   ): Promise<ExportDomainOverviewResponse> {
-    return fetchJson<ExportDomainOverviewResponse>(`${API_BASE}/${projectId}/export`, {
+    return requestJson<ExportDomainOverviewResponse>(`${API_PATH}/${projectId}/export`, {
       method: "POST",
-      body: JSON.stringify(request),
+      body: request,
     });
   },
 
   // Capabilities
-  async getCapabilities(): Promise<Record<string, any>> {
-    return fetchJson<Record<string, any>>(`${API_BASE}/capabilities`);
+  async getCapabilities(): Promise<Record<string, unknown>> {
+    return requestJson<Record<string, unknown>>(`${API_PATH}/capabilities`);
   },
 };
 
@@ -293,4 +291,8 @@ export function createPositionChangeFilters(overrides: Partial<PositionChangesFi
     date_to: undefined,
     ...overrides,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAuditHistory,
   pollAuditProgress,
+  startSeoAudit,
   type SeoAuditIssue,
   type SeoAuditResult,
 } from "../../services/seo";
@@ -16,6 +17,7 @@ vi.mock("../../services/seo", () => ({
   compareAudits: vi.fn(),
   downloadAuditCsv: vi.fn(),
   pollAuditProgress: vi.fn(),
+  startSeoAudit: vi.fn(),
 }));
 
 vi.mock("../../services/seoProjectService", () => ({
@@ -75,7 +77,7 @@ describe("SiteAuditPage", () => {
 
   it("shows audit loading state without making a real network request", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+    vi.mocked(startSeoAudit).mockReturnValue(new Promise(() => undefined));
     render(<SiteAuditPage initialProjectId="project-1" />);
 
     await user.type(screen.getByPlaceholderText("https://example.com"), "https://vex.test");
@@ -86,10 +88,7 @@ describe("SiteAuditPage", () => {
 
   it("shows the existing error state when the audit service fails", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: false,
-      text: async () => "audit service unavailable",
-    }));
+    vi.mocked(startSeoAudit).mockRejectedValue(new Error("audit service unavailable"));
     render(<SiteAuditPage initialProjectId="project-1" />);
 
     await user.type(screen.getByPlaceholderText("https://example.com"), "https://vex.test");
@@ -157,17 +156,14 @@ async function startAudit(user: ReturnType<typeof userEvent.setup>) {
 }
 
 function stubCompletedAudit(audit: SeoAuditResult) {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce({
-      ok: true,
-      url: "http://127.0.0.1:8000/seo/audits/audit-1/progress",
-      json: async () => ({ id: "audit-1" }),
-    } as Response)
-    .mockResolvedValueOnce({
-      ok: true,
-      json: async () => audit,
-    } as Response);
+  vi.mocked(startSeoAudit).mockResolvedValue({
+    auditId: "audit-1",
+    resultUrl: "http://127.0.0.1:8000/seo/audits",
+  });
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({
+    ok: true,
+    json: async () => audit,
+  } as Response);
   vi.stubGlobal("fetch", fetchMock);
   vi.mocked(pollAuditProgress).mockResolvedValue(completedProgress());
 }

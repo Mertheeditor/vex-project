@@ -1,4 +1,4 @@
-const BASE = "http://127.0.0.1:8000";
+import { ApiError, apiRequest } from "./apiClient";
 
 export type ProviderMode = "auto" | "manual";
 
@@ -43,32 +43,42 @@ export interface UpdateProviderSettingsRequest {
 }
 
 export async function fetchProvidersStatus(): Promise<ProvidersStatusResponse> {
-  const response = await fetch(`${BASE}/ai/providers/status`, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch providers status: ${response.status}`);
+  try {
+    return await apiRequest<ProvidersStatusResponse>("/ai/providers/status", { cache: "no-store" });
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      throw new Error(`Failed to fetch providers status: ${error.status}`);
+    }
+    throw error;
   }
-  return response.json();
 }
 
 export async function fetchProviderSettings(): Promise<ProviderSettings> {
-  const response = await fetch(`${BASE}/ai/provider/settings`, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch provider settings: ${response.status}`);
+  try {
+    return await apiRequest<ProviderSettings>("/ai/provider/settings", { cache: "no-store" });
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      throw new Error(`Failed to fetch provider settings: ${error.status}`);
+    }
+    throw error;
   }
-  return response.json();
 }
 
 export async function updateProviderSettings(data: UpdateProviderSettingsRequest): Promise<ProviderSettings> {
-  const response = await fetch(`${BASE}/ai/provider/settings`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Failed to update settings: ${response.status}`);
+  try {
+    return await apiRequest<ProviderSettings>("/ai/provider/settings", {
+      method: "PATCH",
+      body: data,
+    });
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.status !== null) {
+      if (isRecord(error.body) && typeof error.body.detail === "string" && error.body.detail) {
+        throw new Error(error.body.detail);
+      }
+      throw new Error(`Failed to update settings: ${error.status}`);
+    }
+    throw error;
   }
-  return response.json();
 }
 
 export function getStatusColor(status: ProviderHealth["status"]): string {
@@ -95,4 +105,8 @@ export function getStatusLabel(status: ProviderHealth["status"]): string {
     checking: "Kontrol Ediliyor",
   };
   return labels[status] || status;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
