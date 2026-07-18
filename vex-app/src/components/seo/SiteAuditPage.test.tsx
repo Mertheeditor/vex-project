@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAuditHistory,
+  fetchSeoAuditResult,
   pollAuditProgress,
   startSeoAudit,
   type SeoAuditIssue,
@@ -16,6 +17,7 @@ vi.mock("../../services/seo", () => ({
   fetchAuditHistory: vi.fn(),
   compareAudits: vi.fn(),
   downloadAuditCsv: vi.fn(),
+  fetchSeoAuditResult: vi.fn(),
   pollAuditProgress: vi.fn(),
   startSeoAudit: vi.fn(),
 }));
@@ -41,6 +43,10 @@ describe("SiteAuditPage", () => {
       has_next: false,
       has_prev: false,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders all six main tabs", async () => {
@@ -95,6 +101,33 @@ describe("SiteAuditPage", () => {
     await user.click(screen.getByRole("button", { name: "Site Audit Başlat" }));
 
     expect(await screen.findByText("✗ Audit başarısız oldu")).toBeVisible();
+  });
+
+  it("shows the existing error state when loading the completed audit fails", async () => {
+    const user = userEvent.setup();
+    stubCompletedAudit(makeAudit());
+    vi.mocked(fetchSeoAuditResult).mockRejectedValue(new Error("audit result unavailable"));
+    render(<SiteAuditPage initialProjectId="project-1" />);
+
+    await user.type(screen.getByPlaceholderText("https://example.com"), "https://vex.test");
+    await user.click(screen.getByRole("button", { name: "Site Audit Başlat" }));
+
+    expect(await screen.findByText("✗ Audit başarısız oldu")).toBeVisible();
+  });
+
+  it("loads a completed audit through the SEO service without calling fetch directly", async () => {
+    const audit = makeAudit();
+    const fetchMock = vi.fn<typeof fetch>();
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", fetchMock);
+    stubCompletedAudit(audit);
+    render(<SiteAuditPage initialProjectId="project-1" />);
+
+    await startAudit(user);
+
+    expect(fetchSeoAuditResult).toHaveBeenCalledWith("http://127.0.0.1:8000/seo/audits");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText("92/100")).toBeVisible();
   });
 
   it("renders real audit summary values in the overview cards", async () => {
@@ -160,11 +193,7 @@ function stubCompletedAudit(audit: SeoAuditResult) {
     auditId: "audit-1",
     resultUrl: "http://127.0.0.1:8000/seo/audits",
   });
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({
-    ok: true,
-    json: async () => audit,
-  } as Response);
-  vi.stubGlobal("fetch", fetchMock);
+  vi.mocked(fetchSeoAuditResult).mockResolvedValue(audit);
   vi.mocked(pollAuditProgress).mockResolvedValue(completedProgress());
 }
 

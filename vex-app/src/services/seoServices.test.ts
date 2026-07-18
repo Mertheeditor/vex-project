@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SeoDomainService } from "./seoDomainService";
 import { SeoProjectService } from "./seoProjectService";
-import { startSeoAudit } from "./seo";
+import { fetchSeoAuditResult, startSeoAudit } from "./seo";
 
 describe("migrated SEO service contracts", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
@@ -83,4 +83,84 @@ describe("migrated SEO service contracts", () => {
       project_id: "project-1",
     }));
   });
+
+  it("normalizes a wrapped backend audit result", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ audit: backendAudit() })));
+
+    await expect(fetchSeoAuditResult("http://127.0.0.1:8000/seo/audits")).resolves.toMatchObject({
+      audit_id: "audit-42",
+      status: "completed",
+      summary: {
+        score: 91,
+        pages_crawled: 1,
+        p0: 0,
+        p1: 1,
+      },
+      pages: [{ url: "https://vex.test", status: 200 }],
+      issues: [{ id: "missing-title", priority: "P1" }],
+    });
+  });
+
+  it("normalizes a direct backend audit result", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(backendAudit())));
+
+    const result = await fetchSeoAuditResult("http://127.0.0.1:8000/seo/audits");
+
+    expect(result.audit_id).toBe("audit-42");
+    expect(result.summary?.score).toBe(91);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/seo/audits",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("rejects an unexpected audit result format with a meaningful error", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ audits: [] })));
+
+    await expect(fetchSeoAuditResult("http://127.0.0.1:8000/seo/audits")).rejects.toThrow(
+      "SEO audit cevabı beklenen formatta değil."
+    );
+  });
+
+  it("preserves HTTP error semantics while loading an audit result", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: "Service unavailable" }), {
+      status: 503,
+      statusText: "Service Unavailable",
+    }));
+
+    await expect(fetchSeoAuditResult("http://127.0.0.1:8000/seo/audits")).rejects.toThrow("HTTP 503");
+  });
 });
+
+function backendAudit() {
+  return {
+    id: "audit-42",
+    status: "completed",
+    score: 91,
+    max_pages: 10,
+    crawled_pages: 1,
+    site_signals: {
+      discovered_urls: 1,
+      crawled_urls: 1,
+    },
+    pages: [{
+      url: "https://vex.test",
+      status_code: 200,
+      page_score: 91,
+      title: "Vex",
+      h1: ["Vex"],
+      indexable: true,
+      word_count: 100,
+      issues: [],
+    }],
+    issues: [{
+      severity: "P1",
+      code: "missing-title",
+      message: "Title eksik",
+      url: "https://vex.test",
+      recommendation: "Title ekleyin",
+      scope: "on_page",
+    }],
+    recommendations: [],
+  };
+}

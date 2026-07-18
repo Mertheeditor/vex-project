@@ -66,6 +66,16 @@ export async function startSeoAudit(request: SeoAuditRequest): Promise<StartedSe
   };
 }
 
+export async function fetchSeoAuditResult(resultUrl: string): Promise<SeoAuditResult> {
+  const data = await requestWithHttpStatus<unknown>(resultUrl);
+  const audit = unwrapBackendAudit(data);
+  if (!audit) {
+    throw new Error("SEO audit cevabı beklenen formatta değil.");
+  }
+
+  return normalizeBackendAudit(audit);
+}
+
 async function requestSeoAudit(request: SeoAuditRequest): Promise<unknown> {
   return apiRequest<unknown>(SEO_API_PATH, {
     method: "POST",

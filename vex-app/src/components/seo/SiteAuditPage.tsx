@@ -4,6 +4,7 @@ import {
   fetchAuditHistory,
   compareAudits,
   downloadAuditCsv,
+  fetchSeoAuditResult,
   pollAuditProgress,
   startSeoAudit,
   type SeoAuditResult,
@@ -355,9 +356,8 @@ export function SiteAuditPage({ initialProjectId }: SiteAuditPageProps) {
         );
 
         if (result.status === "completed") {
-          const auditResult = await fetch(response.resultUrl).then((r) => r.json());
-          const normalized = normalizeBackendAudit(auditResult);
-          setCurrentAudit(normalized);
+          const auditResult = await fetchSeoAuditResult(response.resultUrl);
+          setCurrentAudit(auditResult);
           setAuditStatus("completed");
           loadAuditHistory();
         } else if (result.status === "failed") {
@@ -368,12 +368,6 @@ export function SiteAuditPage({ initialProjectId }: SiteAuditPageProps) {
       console.error("Audit failed:", error);
       setAuditStatus("failed");
     }
-  };
-
-  // Normalize backend audit (copied from seo.ts)
-  const normalizeBackendAudit = (audit: Record<string, unknown>): SeoAuditResult => {
-    // Simplified normalization - handles the key fields
-    return audit as unknown as SeoAuditResult;
   };
 
   // Compute issues filters from data
