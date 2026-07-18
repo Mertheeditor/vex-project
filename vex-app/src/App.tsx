@@ -4,6 +4,7 @@ import { SiteAuditPage } from "./components/seo/SiteAuditPage";
 import { DomainOverviewPage } from "./components/seo/DomainOverviewPage";
 import { ProviderSettingsPanel } from "./components/settings/ProviderSettingsPanel";
 import { DashboardView } from "./views/DashboardView";
+import { ProjectsView, type CreateProjectPayload } from "./views/ProjectsView";
 import "./App.css";
 
 type Message = {
@@ -712,26 +713,6 @@ function App() {
     if (activeView === "site-audit") return "Site Audit";
     if (activeView === "settings") return "Ayarlar";
     return "Vex";
-  }
-
-  function slugify(text: string) {
-    return text
-      .toLocaleLowerCase("tr-TR")
-      .replace(/ı/g, "i")
-      .replace(/ğ/g, "g")
-      .replace(/ü/g, "u")
-      .replace(/ş/g, "s")
-      .replace(/ö/g, "o")
-      .replace(/ç/g, "c")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }
-
-  function splitLines(text: string) {
-    return text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
   }
 
   function cleanTranscribedText(text: string) {
@@ -1956,10 +1937,8 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
     }
   }
 
-  async function createProject() {
-    const cleanName = projectName.trim();
-
-    if (!cleanName || isCreatingProject) {
+  async function createProject(project: CreateProjectPayload) {
+    if (!project.name || isCreatingProject) {
       return;
     }
 
@@ -1971,15 +1950,7 @@ Onay Merkezi’nden onaylayabilir veya reddedebilirsin.`;
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          id: slugify(cleanName),
-          name: cleanName,
-          type: projectType.trim() || "Genel proje",
-          status: "aktif",
-          description: projectDescription.trim(),
-          main_goals: splitLines(projectGoals),
-          notes: splitLines(projectNotes),
-        }),
+        body: JSON.stringify(project),
       });
 
       if (!response.ok) {
@@ -3524,163 +3495,30 @@ Durum: ${outputResult.output.status}
         ) : null}
 
         {activeView === "projects" ? (
-          <>
-            <header className="topbar">
-              <div>
-                <p className="eyebrow">Proje merkezi</p>
-                <h2>Vex Projeleri</h2>
-              </div>
-              <div className="topbar-actions">
-                <button
-                  className="small-action-button"
-                  onClick={() => setShowProjectForm((value) => !value)}
-                >
-                  {showProjectForm ? "Formu Kapat" : "Yeni Proje"}
-                </button>
-                <button className="small-action-button" onClick={loadProjects}>
-                  Yenile
-                </button>
-              </div>
-            </header>
-
-            <div className="projects-page">
-              {showProjectForm ? (
-                <div className="project-form">
-                  <div>
-                    <p className="eyebrow">Yeni proje</p>
-                    <h3>Vex’e yeni proje ekle</h3>
-                  </div>
-
-                  <div className="form-grid">
-                    <label>
-                      Proje adı
-                      <input
-                        value={projectName}
-                        onChange={(event) => setProjectName(event.target.value)}
-                        placeholder="Örn: Yeni Shopify Sitesi"
-                      />
-                    </label>
-
-                    <label>
-                      Proje tipi
-                      <input
-                        value={projectType}
-                        onChange={(event) => setProjectType(event.target.value)}
-                        placeholder="Örn: E-ticaret / Shopify"
-                      />
-                    </label>
-                  </div>
-
-                  <label>
-                    Açıklama
-                    <textarea
-                      value={projectDescription}
-                      onChange={(event) => setProjectDescription(event.target.value)}
-                      placeholder="Bu proje ne için oluşturuluyor?"
-                    />
-                  </label>
-
-                  <label>
-                    Ana hedefler
-                    <textarea
-                      value={projectGoals}
-                      onChange={(event) => setProjectGoals(event.target.value)}
-                      placeholder={"Her satıra bir hedef yaz\nÖrn: Global site yapısı kurulacak"}
-                    />
-                  </label>
-
-                  <label>
-                    Notlar
-                    <textarea
-                      value={projectNotes}
-                      onChange={(event) => setProjectNotes(event.target.value)}
-                      placeholder={"Her satıra bir not yaz\nÖrn: Tasarım modern ve premium olacak"}
-                    />
-                  </label>
-
-                  <div className="form-actions">
-                    <button
-                      className="small-action-button"
-                      onClick={createProject}
-                      disabled={isCreatingProject}
-                    >
-                      {isCreatingProject ? "Kaydediliyor..." : "Projeyi Kaydet"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {isProjectsLoading ? (
-                <div className="panel-card">
-                  <strong>Projeler yükleniyor...</strong>
-                </div>
-              ) : projects.length > 0 ? (
-                <div className="project-grid">
-                  {projects.map((project) => (
-                    <div className="project-card" key={project.id}>
-                      <div className="project-card-header">
-                        <div>
-                          <p className="panel-label">{project.type}</p>
-                          <h3>{project.name}</h3>
-                        </div>
-
-                        <div className="project-card-actions">
-                          {activeProjectId === project.id ? (
-                            <span className="status-pill">Aktif Proje</span>
-                          ) : (
-                            <button
-                              className="small-action-button"
-                              type="button"
-                              onClick={() => setProjectAsActive(project.id)}
-                            >
-                              Aktif Yap
-                            </button>
-                          )}
-
-                          <span className="status-pill">{project.status}</span>
-
-                          <button
-                            className="danger-button"
-                            type="button"
-                            onClick={() => deleteProject(project.id)}
-                          >
-                            Sil
-                          </button>
-                        </div>
-                      </div>
-
-                      <p className="project-description">{project.description}</p>
-
-                      <div className="project-section">
-                        <p className="panel-label">Ana hedefler</p>
-                        <ul>
-                          {project.main_goals.map((goal, index) => (
-                            <li key={`${project.id}-goal-${index}`}>{goal}</li>
-                          ))}
-                        </ul>
-                      </div>
-
-                      <div className="project-section">
-                        <p className="panel-label">Notlar</p>
-                        <ul>
-                          {project.notes.map((note, index) => (
-                            <li key={`${project.id}-note-${index}`}>{note}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="panel-card">
-                  <strong>Henüz proje yok.</strong>
-                  <p className="panel-label">
-                    Backend’de projects.json dosyasını kontrol edelim.
-                  </p>
-                </div>
-              )}
-            </div>
-          </>
+          <ProjectsView
+            projects={projects}
+            activeProjectId={activeProjectId}
+            isProjectsLoading={isProjectsLoading}
+            isCreatingProject={isCreatingProject}
+            projectForm={{
+              isOpen: showProjectForm,
+              name: projectName,
+              type: projectType,
+              description: projectDescription,
+              goals: projectGoals,
+              notes: projectNotes,
+              toggle: () => setShowProjectForm((value) => !value),
+              setName: setProjectName,
+              setType: setProjectType,
+              setDescription: setProjectDescription,
+              setGoals: setProjectGoals,
+              setNotes: setProjectNotes,
+            }}
+            onRefresh={loadProjects}
+            onSelectProject={setProjectAsActive}
+            onCreateProject={createProject}
+            onDeleteProject={deleteProject}
+          />
         ) : null}
 
         {activeView === "tasks" ? (
