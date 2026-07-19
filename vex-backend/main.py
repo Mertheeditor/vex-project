@@ -22,11 +22,14 @@ from app.routes import (
     shopify,
     site,
     speech,
+    task_executions,
     tasks,
     workspace,
 )
+from app.services.task_execution_runtime import TaskExecutionRuntime
 
 app = FastAPI(title="Vex Backend", version="0.3.0")
+app.state.task_execution_runtime = TaskExecutionRuntime()
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +60,7 @@ app.include_router(memory.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(approvals.router)
+app.include_router(task_executions.router)
 app.include_router(outputs.router)
 app.include_router(reminders.router)
 app.include_router(workspace.router)

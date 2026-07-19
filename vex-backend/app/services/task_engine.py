@@ -63,6 +63,34 @@ ALLOWED_TRANSITIONS: dict[AgentTaskStatus, set[AgentTaskStatus]] = {
 }
 
 
+class TaskEngineError(ValueError):
+    """Base error for safe callers of TaskEngine."""
+
+
+class InvalidTaskRiskError(TaskEngineError):
+    pass
+
+
+class BlackRiskError(TaskEngineError):
+    pass
+
+
+class ApprovalRequiredError(TaskEngineError):
+    pass
+
+
+class RejectedApprovalError(TaskEngineError):
+    pass
+
+
+class TaskAlreadyRunningError(TaskEngineError):
+    pass
+
+
+class TerminalTaskError(TaskEngineError):
+    pass
+
+
 def _normalize_risk(value: str | None) -> str:
     return str(value or "").strip().lower()
 
@@ -79,30 +107,30 @@ def _check_approval_gate(task_id: str, task_risk: str) -> None:
     risk = _normalize_risk(task_risk)
 
     if risk == "black":
-        raise ValueError("Task has black risk level - cannot proceed")
+        raise BlackRiskError("Task has black risk level - cannot proceed")
 
     if risk == "green":
         return
 
     if risk not in ("yellow", "red"):
-        raise ValueError(f"Unknown or missing risk level: '{task_risk}'")
+        raise InvalidTaskRiskError(f"Unknown or missing risk level: '{task_risk}'")
 
     approvals = list_items(APPROVALS_PATH)
     linked_approvals = [a for a in approvals if _get_linked_task_id(a) == task_id]
 
     if not linked_approvals:
-        raise ValueError(f"No approval found for task '{task_id}' with risk level '{risk}'")
+        raise ApprovalRequiredError(f"No approval found for task '{task_id}' with risk level '{risk}'")
 
     has_rejected = any(a.get("status") == "reddedildi" for a in linked_approvals)
     if has_rejected:
-        raise ValueError(f"Task '{task_id}' has a rejected approval")
+        raise RejectedApprovalError(f"Task '{task_id}' has a rejected approval")
 
     has_matching_approval = any(
         a.get("status") == "onaylandı" and _normalize_risk(a.get("risk_level")) == risk
         for a in linked_approvals
     )
     if not has_matching_approval:
-        raise ValueError(f"Task '{task_id}' requires an approved approval for risk level '{risk}'")
+        raise ApprovalRequiredError(f"Task '{task_id}' requires an approved approval for risk level '{risk}'")
 
 
 class TaskEngine:
@@ -146,7 +174,7 @@ class TaskEngine:
     def transition(self, task_id: str, new_status: AgentTaskStatus) -> AgentTaskRecord:
         record = self.get_task(task_id)
         if record.status in TERMINAL_TASK_STATUSES:
-            raise ValueError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
+            raise TerminalTaskError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
         allowed = ALLOWED_TRANSITIONS.get(record.status, set())
         if new_status not in allowed:
             raise ValueError(f"Invalid transition for task '{task_id}': {record.status.value} -> {new_status.value}.")
@@ -164,6 +192,21 @@ class TaskEngine:
             record.completed_at = now
         return record
 
+    def check_execution_allowed(self, task_id: str) -> None:
+        """Apply the same fail-closed gate used by every RUNNING transition."""
+        record = self.get_task(task_id)
+        if record.status == AgentTaskStatus.RUNNING and record.started_at is not None:
+            raise TaskAlreadyRunningError(f"Task '{task_id}' is already running.")
+        if record.status in TERMINAL_TASK_STATUSES:
+            raise TerminalTaskError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
+        if record.status != AgentTaskStatus.WAITING_APPROVAL:
+            raise TaskEngineError(
+                f"Task '{task_id}' must be waiting_approval before execution, "
+                f"not '{record.status.value}'."
+            )
+        risk = record.metadata.get("risk_level")
+        _check_approval_gate(task_id, str(risk) if risk is not None else "")
+
     async def execute_task(
         self,
         task_id: str,
@@ -173,9 +216,9 @@ class TaskEngine:
         """Run an agent task after enforcing approval-gated execution rules."""
         record = self.get_task(task_id)
         if record.status == AgentTaskStatus.RUNNING and record.started_at is not None:
-            raise ValueError(f"Task '{task_id}' is already running.")
+            raise TaskAlreadyRunningError(f"Task '{task_id}' is already running.")
         if record.status in TERMINAL_TASK_STATUSES:
-            raise ValueError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
+            raise TerminalTaskError(f"Task '{task_id}' is already terminal with status '{record.status.value}'.")
         if record.status != AgentTaskStatus.WAITING_APPROVAL:
             raise ValueError(
                 f"Task '{task_id}' must be waiting_approval before execution, "
